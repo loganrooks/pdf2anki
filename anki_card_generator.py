@@ -146,12 +146,23 @@ def merge_adjacent_elements(lst=list, n=1):
     return [''.join(lst[i:i + n]) for i in range(0, len(lst), n)]
 
 # Function to split text based on regex or default to 8 paragraphs, ignores everything up to the first page number.
-def split_text(text, regex=None):
-    if regex:
-        return merge_adjacent_elements(re.split(ensure_brackets(regex), text)[1:], n=2)
+def split_text(text: str, regex=None, full_paragraphs=True, n_paragraphs_per_page=3):
+    if regex and not full_paragraphs:
+        text_chunks = merge_adjacent_elements(re.split(ensure_brackets(regex), text)[1:], n=2)
+    elif regex:
+        text_chunks=[]
+        text_chunk = ''
+        paragraphs = text.split('\n\n')
+        for i, paragraph in enumerate(paragraphs):
+            text_chunk += paragraph + "\n\n"
+            if (i > 1) and re.search(regex, paragraph):
+                text_chunks.append(text_chunk)
+                text_chunk = ''
     else:
         paragraphs = text.split('\n\n')
-        return ['\n'.join(paragraphs[i:i+8]) for i in range(0, len(paragraphs), 8)]
+        text_chunks = ['\n\n'.join(paragraphs[i:i+n_paragraphs_per_page]) for i in range(0, len(paragraphs), n_paragraphs_per_page)]
+
+    return text_chunks
 
 # CREATING ANKI CARDS
 
@@ -232,24 +243,79 @@ def find_remaining_text(input_chunk, remaining_content):
     
 
 # WRITING TO FILE
-def write_json_to_file(output_json_path: str, output, args: argparse.ArgumentParser):
-    with open(output_json_path, 'a+', encoding='utf8') as output_file:
-            if args.test:
-                output = [{"args": vars(args), "output": output.copy()}]
-            if not args.overwrite:
-                try: 
-                    output_file.seek(0)
-                    existing_content = json.loads(output_file.read())
-                    output.extend(existing_content)          
-                except:
-                    print("File corrupted, empty or is not a list. Forcing overwrite.")
-                finally:
-                    output_file.seek(0)
-                    output_file.truncate()
-            
-            json.dump(output, output_file, indent=4)
+def write_json_to_file(output_json_path: str, output: str, args: argparse.ArgumentParser, mode='w+'):
+    try:
+        with open(output_json_path, mode, encoding='utf8') as output_file:
+                if args.test:
+                    output = [{"args": vars(args), "output": output.copy()}]
+                if not args.overwrite:
+                    try: 
+                        output_file.seek(0)
+                        existing_content = json.loads(output_file.read())
+                        output.extend(existing_content)          
+                    except:
+                        print("File corrupted, empty or is not a list. Forcing overwrite.")
+                    finally:
+                        output_file.seek(0)
+                        output_file.truncate()
+                
+                json.dump(output, output_file, indent=4)
+    except FileNotFoundError as e:
+        return e
 
+def write_json_to_csv(output_csv_path: str, output: str, args: argparse.ArgumentParser, mode='w+'):
+    flattened_json = flatten_json(output)
+    try:
+        with open(output_csv_path, mode, encoding='utf8') as output_file:
+                if not args.overwrite:
+                    try: 
+                        output_file.seek(0)
+                        existing_content = json.loads(output_file.read())
+                        flattened_json.extend(existing_content)          
+                    except:
+                        print("File corrupted, empty or is not a list. Forcing overwrite.")
+                    finally:
+                        output_file.seek(0)
+                        output_file.truncate()
+                
+                json.dump(flattened_json, output_file, indent=4)
+    except FileNotFoundError as e:
+        return e
 
+def flatten_json(nested_json):
+    """
+    Flatten a nested JSON structure.
+    
+    Args:
+        nested_json (list): A list of dictionaries, potentially nested.
+    
+    Returns:
+        list: A list of flattened dictionaries.
+    """
+    def flatten_dict(d, parent_key='', sep='_'):
+        items = []
+        for k, v in d.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            if isinstance(v, dict):
+                items.extend(flatten_dict(v, new_key, sep=sep).items())
+            elif isinstance(v, list):
+                for i, item in enumerate(v):
+                    if isinstance(item, dict):
+                        items.extend(flatten_dict(item, f"{new_key}{sep}{i}", sep=sep).items())
+                    else:
+                        items.append((f"{new_key}{sep}{i}", item))
+            else:
+                items.append((new_key, v))
+        return dict(items)
+    
+    flattened_json = []
+    for item in nested_json:
+        if isinstance(item, dict):
+            flattened_json.append(flatten_dict(item))
+        else:
+            flattened_json.append({f"item_{i}": item for i, item in enumerate(nested_json)})
+    
+    return flattened_json
 
 
 
@@ -270,6 +336,10 @@ def main():
     parser.add_argument('-r', '--regex', type=str, help='Regular expression to split the text', default=None)
     parser.add_argument('--pages_per_chunk', type=int, help='Number of pages per text chunk to be inputed to the model', default=1)
     parser.add_argument('--page_range', type=int, nargs=2, help='Number of total pages to be converted', default=[1,0])
+    parser.add_argument('--full_paragraphs', action='store_true', help='Whether the chunks should always end on the final sentence of a paragraph')
+    parser.add_argument('--n_paragraphs_per_page', type=int, help='The estimated number of paragraphs per page (use only if you don\'t have page # regex)', default=4)
+
+
 
     # FOR OPENAI GPT 4o MINI ANKI CARD GENERATION
     parser.add_argument('--prompt_file', type=str, help='Path to a text file containing system prompt instructions', default=None)
@@ -294,7 +364,7 @@ def main():
         title, text = extract_text_from_pdf(args.pdf_file, **params)
 
         # Split text based on regex or default to 8 paragraphs
-        text_chunks = merge_adjacent_elements(split_text(text, args.regex), n=args.pages_per_chunk)
+        text_chunks = merge_adjacent_elements(split_text(text, args.regex, args.full_paragraphs, args.n_paragraphs_per_page), n=args.pages_per_chunk)
 
         # Load prompt instructions from file or use provided prompt text
         if args.prompt_file:
@@ -313,7 +383,7 @@ def main():
                 "- Include the text citation with page number under the field 'Citation'.\n"
                 "- Do not invent anything; use only the given text.\n"
                 "- Do not just remove single words for cloze deletion; include phrases or clauses as well.\n"
-                "- Emphasis: Cloze delete roughly one-third of the input, ensuring all German, Greek, or Latin phrases/terms are cloze deleted. Aim for at least 30 cloze deletions per card, ideally 40, with high density. Cloze delete even regular words if you are unable to meet the quota.\n"
+                "- Emphasis: Cloze delete roughly one-third of the input, ensuring all German, Greek, or Latin phrases/terms are cloze deleted. Aim for at least 20 cloze deletions per card, ideally 30, with high density. Cloze delete even regular words if you are not cloze deleting more than 20 phrases / terms.\n"
                 "- The 'Text' field should contain at least a paragraph (4-5 sentences) with one-third cloze deletions per card but max 3 clozes (c1, c2, c3). Multiple 'c1's, 'c2's, and possibly 'c3's should be thematically related.\n"
                 f"- Include the title '{title}' along with the page number in the citation.\n"
                 "- Write in English (unless there are German, Latin, or Greek terms).\n"
@@ -323,13 +393,15 @@ def main():
                 "- Ensure all instances and semantically similar instances of a deleted term are clozed. These cards should not be easy, I want no left over hints."
                 "- Cloze delete all semantically similar instances of any phrase or term you cloze delete. Cloze delete all of Heidegger's terminology and all of his definitions. Most subjects and predicates of sentences must be cloze deleted."
                 "- All hyphenated words must be cloze deleted (e.g. Being-in-the-world, within-the-world, Being-in, reference-relations, existential-ontological, ontico-existentiell etc.)."
-                "- Example format for 'Text' field: \"The full {{c1::essence of truth}}, including its most proper {{c1::nonessence}}, keeps {{c2::Dasein}} in need by this perpetual {{c1::turning to and fro}}. {{c2::Dasein}} is a {{c1::turning into need}}. From the {{c2::Da-sein}} of human beings and from it alone arises the disclosure of {{c1::necessity}} and, as a result, the {{c1::possibility of being transposed}} into what is {{c2::inevitable}}. The disclosure of beings as such is {{c1::simultaneously}} and {{c1::intrinsically}} the {{c2::concealing of beings}}.\""
+                "- Example format for 'Text' field, please match the number and density of cloze deletions for your own cards: \"The full {{c1::essence of truth}}, including its most proper {{c1::nonessence}}, keeps {{c2::Dasein}} in need by this perpetual {{c1::turning to and fro}}. {{c2::Dasein}} is a {{c1::turning into need}}. From the {{c2::Da-sein}} of human beings and from it alone arises the disclosure of {{c1::necessity}} and, as a result, the {{c1::possibility of being transposed}} into what is {{c2::inevitable}}. The disclosure of beings as such is {{c1::simultaneously}} and {{c1::intrinsically}} the {{c2::concealing of beings}}.\""
             )
 
         if args.regex:
             system_prompt += f"For citation purposes, you can locate the page numbers using the regex '{args.regex}'. Make sure to keep track of when you cross page numbers and cite accordingly. Every text chunk starts with a page number and there should be a total of {str(args.pages_per_chunk)} pages per text chunk."
 
         output_json_path = args.out
+        output_csv_path = os.path.splitext(output_json_path)[0] + ".csv"
+
 
         if args.test:
             # output_json_path = os.path.splitext(output_json_path)[0] + "_test_t{}_tp{}_mct{}.json".format(str(args.temperature).translate(str.maketrans('', '',string.punctuation)), str(args.top_p).translate(str.maketrans('', '',string.punctuation)), args.max_completion_tokens)
@@ -350,7 +422,11 @@ def main():
         if args.test:
             text_chunks = text_chunks[:1] if len(text_chunks) > 1 else text_chunks
             print("Writing inputs to file...")
-            write_json_to_file(output_json_path=input_json_path, output=text_chunks, args=args)
+            try:
+                write_json_to_file(output_json_path=input_json_path, output=text_chunks, args=args, mode='a+')
+            except FileNotFoundError:
+                write_json_to_file(output_json_path=input_json_path, output=text_chunks, args=args, mode='w+')
+
 
         
         for (temperature, max_completion_tokens, top_p) in product(args.temperature, args.max_completion_tokens, args.top_p):
@@ -407,15 +483,28 @@ def main():
 
         # write the outputs and the error logs to file    
         print("Writing outputs to file...")
-        write_json_to_file(output_json_path=output_json_path, output=all_outputs, args=args)
+        try:
+            write_json_to_file(output_json_path=output_json_path, output=all_outputs, args=args, mode='a+')
+            write_json_to_csv(output_csv_path=output_csv_path, output=all_outputs, args=args, mode='a+')
+        except FileNotFoundError:
+            write_json_to_file(output_json_path=output_json_path, output=all_outputs, args=args, mode="w+")
+            write_json_to_csv(output_csv_path=output_csv_path, output=all_outputs, args=args, mode='w+')
+
 
         if all_remaining_text:
             print("Writing remaining text to file...")
-            write_json_to_file(output_json_path=remaining_text_path, output=all_remaining_text, args=args)
+            try:
+                write_json_to_file(output_json_path=remaining_text_path, output=all_remaining_text, args=args, mode="a+")
+            except FileNotFoundError:
+                write_json_to_file(output_json_path=remaining_text_path, output=all_remaining_text, args=args, mode="w+")
+
 
         if all_error_logs:
             print("Writing error logs to file...")
-            write_json_to_file(output_json_path=error_log_path, output=all_error_logs, args=args)
+            try:
+                write_json_to_file(output_json_path=error_log_path, output=all_error_logs, args=args, mode='a+')
+            except FileNotFoundError:
+                write_json_to_file(output_json_path=error_log_path, output=all_error_logs, args=args, mode='w+')
 
 
     else:
