@@ -1,3 +1,5 @@
+import datetime
+import hashlib
 import json
 import re
 from openai import OpenAI
@@ -241,13 +243,11 @@ def find_remaining_text(input_chunk, remaining_content):
     else:
         return None
     
-
 # WRITING TO FILE
-def write_json_to_file(output_json_path: str, output: str, args: argparse.ArgumentParser, mode='w+'):
+def write_json_to_file(output_json_path: str, output: str, args: argparse.ArgumentParser, run_id: str, mode='w+'):
     try:
         with open(output_json_path, mode, encoding='utf8') as output_file:
-                if args.test:
-                    output = [{"args": vars(args), "output": output.copy()}]
+                output = [{"args": vars(args), "output": output.copy(), "run_id": run_id}]
                 if not args.overwrite:
                     try: 
                         output_file.seek(0)
@@ -263,22 +263,37 @@ def write_json_to_file(output_json_path: str, output: str, args: argparse.Argume
     except FileNotFoundError as e:
         return e
 
-def write_json_to_csv(output_csv_path: str, output: str, args: argparse.ArgumentParser, mode='w+'):
+import csv
+
+def write_json_to_csv(output_csv_path: str, output: str, args: argparse.ArgumentParser,  run_id: str, mode='w+'):
+    # Flatten the nested JSON structure
     flattened_json = flatten_json(output)
     try:
-        with open(output_csv_path, mode, encoding='utf8') as output_file:
-                if not args.overwrite:
-                    try: 
-                        output_file.seek(0)
-                        existing_content = json.loads(output_file.read())
-                        flattened_json.extend(existing_content)          
-                    except:
-                        print("File corrupted, empty or is not a list. Forcing overwrite.")
-                    finally:
-                        output_file.seek(0)
-                        output_file.truncate()
-                
-                json.dump(flattened_json, output_file, indent=4)
+        # Open the CSV file with the specified mode and encoding
+        with open(output_csv_path, mode, newline='', encoding='utf8') as output_file:
+            # Create a CSV DictWriter object with fieldnames from the first dictionary in the list
+            writer = csv.DictWriter(output_file, fieldnames=flattened_json[0].keys())
+            
+            if not args.overwrite:
+                try:
+                    # Move the file pointer to the beginning of the file
+                    output_file.seek(0)
+                    # Read the existing content of the CSV file into a list of dictionaries
+                    existing_content = list(csv.DictReader(output_file))
+                    # Extend the flattened JSON list with the existing content
+                    flattened_json.extend(existing_content)
+                except:
+                    # Handle cases where the file is corrupted, empty, or not a list
+                    print("File corrupted, empty or is not a list. Forcing overwrite.")
+                finally:
+                    # Move the file pointer to the beginning and truncate the file
+                    output_file.seek(0)
+                    output_file.truncate()
+            
+            # Write the header row to the CSV file
+            writer.writeheader()
+            # Write the rows to the CSV file
+            writer.writerows(flattened_json)
     except FileNotFoundError as e:
         return e
 
@@ -297,22 +312,28 @@ def flatten_json(nested_json):
         for k, v in d.items():
             new_key = f"{parent_key}{sep}{k}" if parent_key else k
             if isinstance(v, dict):
+                # Recursively flatten nested dictionaries
                 items.extend(flatten_dict(v, new_key, sep=sep).items())
             elif isinstance(v, list):
                 for i, item in enumerate(v):
                     if isinstance(item, dict):
+                        # Recursively flatten nested dictionaries within lists
                         items.extend(flatten_dict(item, f"{new_key}{sep}{i}", sep=sep).items())
                     else:
+                        # Add non-dictionary items in lists
                         items.append((f"{new_key}{sep}{i}", item))
             else:
+                # Add non-dictionary items
                 items.append((new_key, v))
         return dict(items)
     
     flattened_json = []
     for item in nested_json:
         if isinstance(item, dict):
+            # Flatten each dictionary in the list
             flattened_json.append(flatten_dict(item))
         else:
+            # Handle non-dictionary items in the list
             flattened_json.append({f"item_{i}": item for i, item in enumerate(nested_json)})
     
     return flattened_json
@@ -357,6 +378,11 @@ def main():
 
     # Determine output paths
 
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-4]
+    args.timestamp = timestamp
+    hash_dict = json.dumps(vars(args), sort_keys=True)
+    run_id = hashlib.sha256(hash_dict.encode()).hexdigest()
+
     if not args.use_example:
 
         # Extract text from epub file
@@ -399,6 +425,7 @@ def main():
         if args.regex:
             system_prompt += f"For citation purposes, you can locate the page numbers using the regex '{args.regex}'. Make sure to keep track of when you cross page numbers and cite accordingly. Every text chunk starts with a page number and there should be a total of {str(args.pages_per_chunk)} pages per text chunk."
 
+        args.prompt_text = system_prompt
         output_json_path = args.out
         output_csv_path = os.path.splitext(output_json_path)[0] + ".csv"
 
@@ -423,9 +450,9 @@ def main():
             text_chunks = text_chunks[:1] if len(text_chunks) > 1 else text_chunks
             print("Writing inputs to file...")
             try:
-                write_json_to_file(output_json_path=input_json_path, output=text_chunks, args=args, mode='a+')
+                write_json_to_file(output_json_path=input_json_path, output=text_chunks, args=args, run_id=run_id, mode='a+')
             except FileNotFoundError:
-                write_json_to_file(output_json_path=input_json_path, output=text_chunks, args=args, mode='w+')
+                write_json_to_file(output_json_path=input_json_path, output=text_chunks, args=args, run_id=run_id, mode='w+')
 
 
         
@@ -477,34 +504,34 @@ def main():
                     break
 
             # append the outputs and error logs for this set of variables to the total list
-            all_outputs.append({"anki_cards": all_anki_cards, "variables": variables})
+            all_outputs.append({"anki_cards": all_anki_cards, "variables": variables, "run_id": run_id})
             if error_log:
-                all_error_logs.append({"error_log": error_log, "variables": variables})
+                all_error_logs.append({"error_log": error_log, "variables": variables, "run_id": run_id})
 
         # write the outputs and the error logs to file    
         print("Writing outputs to file...")
         try:
-            write_json_to_file(output_json_path=output_json_path, output=all_outputs, args=args, mode='a+')
-            write_json_to_csv(output_csv_path=output_csv_path, output=all_outputs, args=args, mode='a+')
+            write_json_to_file(output_json_path=output_json_path, output=all_outputs, args=args, run_id=run_id, mode='a+')
+            write_json_to_csv(output_csv_path=output_csv_path, output=all_outputs, args=args, run_id=run_id, mode='a+')
         except FileNotFoundError:
-            write_json_to_file(output_json_path=output_json_path, output=all_outputs, args=args, mode="w+")
-            write_json_to_csv(output_csv_path=output_csv_path, output=all_outputs, args=args, mode='w+')
+            write_json_to_file(output_json_path=output_json_path, output=all_outputs, args=args, run_id=run_id, mode="w+")
+            write_json_to_csv(output_csv_path=output_csv_path, output=all_outputs, args=args, run_id=run_id, mode='w+')
 
 
         if all_remaining_text:
             print("Writing remaining text to file...")
             try:
-                write_json_to_file(output_json_path=remaining_text_path, output=all_remaining_text, args=args, mode="a+")
+                write_json_to_file(output_json_path=remaining_text_path, output=all_remaining_text, args=args, run_id=run_id, mode="a+")
             except FileNotFoundError:
-                write_json_to_file(output_json_path=remaining_text_path, output=all_remaining_text, args=args, mode="w+")
+                write_json_to_file(output_json_path=remaining_text_path, output=all_remaining_text, args=args, run_id=run_id, mode="w+")
 
 
         if all_error_logs:
             print("Writing error logs to file...")
             try:
-                write_json_to_file(output_json_path=error_log_path, output=all_error_logs, args=args, mode='a+')
+                write_json_to_file(output_json_path=error_log_path, output=all_error_logs, args=args, run_id=run_id, mode='a+')
             except FileNotFoundError:
-                write_json_to_file(output_json_path=error_log_path, output=all_error_logs, args=args, mode='w+')
+                write_json_to_file(output_json_path=error_log_path, output=all_error_logs, args=args, run_id=run_id, mode='w+')
 
 
     else:
@@ -512,7 +539,7 @@ def main():
         example_json_path = os.path.dirname(__file__) + "/examples/example01.json"
         with open(example_json_path, 'r') as example_json:
             all_anki_cards = json.load(example_json)
-        write_json_to_file(output_json_path, all_anki_cards, args)
+        write_json_to_file(output_json_path, all_anki_cards, args, run_id=run_id,)
 
 if __name__ == "__main__":
     main()
