@@ -4,7 +4,6 @@ import json
 import re
 from openai import OpenAI
 from pdfminer.high_level import extract_text
-import pymupdf4llm
 import pdfminer
 from itertools import product
 import os
@@ -315,6 +314,7 @@ def flatten_json(nested_json):
                 # Recursively flatten nested dictionaries
                 items.extend(flatten_dict(v, new_key, sep=sep).items())
             elif isinstance(v, list):
+                # Handle lists by creating separate entries for each item
                 for i, item in enumerate(v):
                     if isinstance(item, dict):
                         # Recursively flatten nested dictionaries within lists
@@ -326,17 +326,21 @@ def flatten_json(nested_json):
                 # Add non-dictionary items
                 items.append((new_key, v))
         return dict(items)
-    
-    flattened_json = []
+
+    # Flatten each dictionary in the list
+    flattened_list = []
     for item in nested_json:
-        if isinstance(item, dict):
-            # Flatten each dictionary in the list
-            flattened_json.append(flatten_dict(item))
+        if 'anki_cards' in item:
+            for card in item['anki_cards']:
+                flattened_card = flatten_dict(card)
+                # Add other top-level keys to each card
+                for key in item:
+                    if key != 'anki_cards':
+                        flattened_card[key] = item[key]
+                flattened_list.append(flattened_card)
         else:
-            # Handle non-dictionary items in the list
-            flattened_json.append({f"item_{i}": item for i, item in enumerate(nested_json)})
-    
-    return flattened_json
+            flattened_list.append(flatten_dict(item))
+    return flattened_list
 
 
 

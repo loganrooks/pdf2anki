@@ -78,17 +78,22 @@ def get_similarity(card_set_a, card_set_b):
 
     return similarity
 
-def check_same_pages_and_chunk_size(flattened_runs: dict, run_ids: tuple):
-    start_page = set()
-    pages_per_chunk = set()
+def check_same_args(flattened_runs: dict, run_ids: tuple, check_args: tuple):
+    check_args_dict = {}
     args = flattened_runs["args"]
 
     for run_id in run_ids:
         run_index = args["run_id"].index(run_id)
-        start_page.add(args["page_range"][run_index][0])
-        pages_per_chunk.add(args["pages_per_chunk"][run_index])
+        for check_arg in check_args:
+            check_arg_value = args[check_arg][run_index]
+            if check_arg in check_args_dict.keys():
+                check_args_dict[check_arg].add(check_arg_value[0] if check_arg=="page_range" else check_arg_value)
+            else:
+                check_args_dict[check_arg] = set([check_arg_value[0]] if check_arg=="page_range" else [check_arg_value])
+
     
-    return len(start_page) == 1 and len(pages_per_chunk) == 1
+    return all(len(value) == 1 for value in check_args_dict.values())
+
 
 
 
@@ -111,7 +116,7 @@ def get_similarities_df(runs, ignore_variables={}):
         cards_b = outputs[b].get('anki_cards', [])
 
         # Check if either output has no cards and log a warning once per output
-        if not check_same_pages_and_chunk_size(flattened_runs, (outputs[a]["run_id"], outputs[b]["run_id"])):
+        if not check_same_args(flattened_runs, (outputs[a]["run_id"], outputs[b]["run_id"]), check_args=["page_range", "pages_per_chunk"]):
             continue
 
         if check_and_warn_empty_output(a, cards_a, warned_indices, "cards_a") or check_and_warn_empty_output(b, cards_b, warned_indices, "cards_b"):
@@ -204,7 +209,7 @@ def check_and_warn_empty_output(index, output, warned_indices, output_name):
         return True
     return not output
 
-def create_html_diff(outputs_a: pd.DataFrame, outputs_b: pd.DataFrame, output_html_path, individual_cards=False, cloze_deletion_stats=pd.DataFrame()):
+def create_html_diff(outputs_a: pd.DataFrame, outputs_b: pd.DataFrame, output_html_path, args: dict[list], individual_cards=False, cloze_deletion_stats=pd.DataFrame(), compare_prompts=True):
     # Initialize HTML diff tool and BeautifulSoup document
     d = difflib.HtmlDiff()
     output_doc = BeautifulSoup("<html><body></body></html>", "html.parser")
@@ -235,6 +240,8 @@ def create_html_diff(outputs_a: pd.DataFrame, outputs_b: pd.DataFrame, output_ht
                 html_diff = d.make_file(lines_a, lines_b, fromdesc=fromdesc, todesc=todesc, context=True)
                 output_doc.body.append(BeautifulSoup(html_diff, "html.parser"))
 
+ 
+
         else:
             # Compare concatenated text of all cards
             text_a = "".join(card["Text"] for card in cards_a)
@@ -246,6 +253,22 @@ def create_html_diff(outputs_a: pd.DataFrame, outputs_b: pd.DataFrame, output_ht
             fromdesc, todesc = get_cloze_descriptions(cloze_deletion_stats, outputs_a, outputs_b, variables_a, variables_b, x, 0)
             html_diff = d.make_file(lines_a, lines_b, fromdesc=fromdesc, todesc=todesc, context=True)
             output_doc.body.append(BeautifulSoup(html_diff, "html.parser"))
+
+        if compare_prompts:
+            run_index_a = args["run_id"].index(outputs_a.loc[x].get("run_id"))
+            run_index_b = args["run_id"].index(outputs_a.loc[x].get("run_id"))
+
+            prompt_a = args["prompt_text"][run_index_a]
+            prompt_b = args["prompt_text"][run_index_b]
+
+            if prompt_a != prompt_b:
+                prompt_lines_a = re.split(r'(?<=[.!?,;])', prompt_a)
+                prompt_lines_b = re.split(r'(?<=[.!?,;])', prompt_b)
+
+                fromdesc, todesc = get_cloze_descriptions(cloze_deletion_stats, outputs_a, outputs_b, variables_a, variables_b, x, 0)  
+                html_diff = d.make_file(prompt_lines_a, prompt_lines_b, fromdesc="PROMPT \\ " + fromdesc, todesc="PROMPT \\ " + todesc, context=False)
+                output_doc.body.append(BeautifulSoup(html_diff, "html.parser"))
+
 
     # Write the final HTML document to the specified path
     with open(output_html_path, "w", encoding="utf-8") as file:
@@ -387,7 +410,7 @@ def main():
     cloze_deletion_stats = get_all_cloze_deletion_stats(flattened_runs["output"], individual_cards=False)
 
     
-    create_html_diff(outputs_a, outputs_b, output_html_path=output_html_diff_path, cloze_deletion_stats=cloze_deletion_stats)
+    create_html_diff(outputs_a, outputs_b, output_html_path=output_html_diff_path, cloze_deletion_stats=cloze_deletion_stats, args=flattened_runs["args"])
 
 
 
