@@ -1,3 +1,15 @@
+tests/test.ipynb
+tests/*.csv
+tests/*.json
+tests/*.pkl
+tests/*.png
+tests/*.jpg
+tests/*.jpeg
+tests/*.gif
+tests/*.tif
+
+
+
 output/*
 .vscode
 examples/*
