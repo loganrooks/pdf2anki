@@ -7,10 +7,10 @@ used to test if a span should be included in the ToC.
 from re import Pattern
 
 import re
-from typing import Dict, Optional, Tuple, Union, List, override
+from typing import Dict, Optional, Set, Tuple, Union, List, overload, override
 from pdf2anki.extraction import ParagraphInfo, LineInfo
 from dataclasses import dataclass
-from collections import Counter
+from multipledispatch import dispatch
 
 from pdf2anki.utils import get_average, concat_bboxes
 
@@ -21,20 +21,22 @@ DEF_TOLERANCE: dict = {"font": 1e-1, "bbox": 1e-1}
 @dataclass
 class FontFilterOptions:
     """Options for configuring the FontFilter."""
-    check_name: bool = True
-    check_color: bool = True
+    check_names: bool = True
+    check_colors: bool = True
     check_size: bool = True
     check_width: bool = True
     check_is_upper: bool = False
+    names_set_strict_equality: bool = True
+    colors_set_strict_equality: bool = True
     size_tolerance: float = DEF_TOLERANCE["font"]
     ign_mask: int = 0
-    ign_pattern: Optional[Pattern] = None
+    ign_pattern: Optional[re.Pattern] = None
 
 @dataclass
 class FontFilterVars:
     """Variables for the FontFilter."""
-    name: Optional[str] = None
-    color: Optional[str] = None
+    names: Optional[Set[str]] = None
+    colors: Optional[Set[str]] = None
     font_size: Optional[float] = None
     char_width: Optional[float] = None
     is_upper: Optional[bool] = None
@@ -85,9 +87,18 @@ class FontFilter:
         """
         self.vars = vars
         self.opts = opts
+    
+    @overload
+    @classmethod
+    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, opts: Optional[Dict[str, Union[bool, float, Optional[re.Pattern]]]] = None) -> 'FontFilter':
+        ...
+
+    @overload
+    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, opts: Optional[FontFilterOptions] = None) -> 'FontFilter':
+        ...
 
     @classmethod
-    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, opts: Optional[FontFilterOptions] = None) -> 'FontFilter':
+    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, opts: Optional[Union[FontFilterOptions, Dict[str, Union[bool, float, Optional[re.Pattern]]]]] = None) -> 'FontFilter':
         """
         Create a FontFilter from a ParagraphInfo object.
 
@@ -100,117 +111,109 @@ class FontFilter:
         """
         if opts is None:
             opts = FontFilterOptions()
-        vars = FontFilterVars()
-        if paragraph_info:
-            vars.name = '//'.join(paragraph_info.fonts)
-            vars.color = '//'.join(paragraph_info.colors)
-            vars.font_size = paragraph_info.font_size
-            vars.char_width = paragraph_info.char_width
-            vars.is_upper = paragraph_info.text.isupper() if opts.ign_pattern is None else re.sub(opts.ign_pattern, "", paragraph_info.text).isupper()
+        elif isinstance(opts, dict):
+            opts = FontFilterOptions(**opts)
+        vars = FontFilterVars( 
+            names = paragraph_info.fonts,
+            colors = paragraph_info.colors,
+            font_size = paragraph_info.font_size,
+            char_width = paragraph_info.char_width,
+            is_upper = paragraph_info.text.isupper() if opts.ign_pattern is None else re.sub(opts.ign_pattern, "", paragraph_info.text).isupper()
+        )
         return cls(vars, opts)
-
+    
+    @overload
     @classmethod
     def from_line_info(cls, line_info: LineInfo, opts: Optional[FontFilterOptions] = None) -> 'FontFilter':
-        """
-        Create a FontFilter from a LineInfo object.
+        ...
 
-        Args:
-            line_info (LineInfo): The LineInfo object.
-            opts (Optional[FontFilterOptions]): The options for configuring the filter.
-
-        Returns:
-            FontFilter: The created FontFilter.
-        """
-        if opts is None:
-            opts = FontFilterOptions()
-        vars = FontFilterVars(
-            name=line_info.font,
-            color=line_info.color,
-            font_size=line_info.size,
-            char_width=line_info.char_width,
-            is_upper=line_info.text.isupper() if opts.ign_pattern is None else re.sub(opts.ign_pattern, "", line_info.text).isupper()
-        )
-        return cls(vars, opts)
-    
-    @override
+    @overload
     @classmethod
-    def from_line_info(cls, line_info: LineInfo, opts: Optional[Dict[str, Union[bool, float]]] = None) -> 'FontFilter':
+    def from_line_info(cls, line_info: LineInfo, opts: Optional[Dict[str, Union[bool, float, Optional[re.Pattern]]]] = None) -> 'FontFilter':
+        ...
+
+    @classmethod
+    def from_line_info(cls, line_info: LineInfo, opts: Optional[Union[FontFilterOptions, Dict[str, Union[bool, float, Optional[re.Pattern]]]]] = None) -> 'FontFilter':
         """
         Create a FontFilter from a LineInfo object.
 
         Args:
             line_info (LineInfo): The LineInfo object.
-            opts (Optional[Dict[str, Union[bool, float]]]): The options for configuring the filter.
+            opts (Optional[Union[FontFilterOptions, Dict[str, Union[bool, float, Optional[re.Pattern]]]]]): The options for configuring the filter.
 
         Returns:
             FontFilter: The created FontFilter.
         """
+
         if opts is None:
             opts = FontFilterOptions()
-        else:
+        elif isinstance(opts, dict):
             opts = FontFilterOptions(**opts)
         vars = FontFilterVars(
-            name=line_info.font,
-            color=line_info.color,
-            font_size=line_info.size,
+            names=line_info.fonts,
+            colors=line_info.colors,
+            font_size=line_info.font_size,
             char_width=line_info.char_width,
             is_upper=line_info.text.isupper() if opts.ign_pattern is None else re.sub(opts.ign_pattern, "", line_info.text).isupper()
         )
         return cls(vars, opts)
+    
+
+    @overload
+    @classmethod
+    def from_line_info_list(cls, line_info_list: List[LineInfo], opts: Optional[Dict[str, Union[bool, float, Optional[re.Pattern]]]] = None) -> 'FontFilter':
+        ...
 
     @classmethod
-    def from_line_info_list(cls, line_info_list: List[LineInfo], opts: Optional[FontFilterOptions] = None) -> 'FontFilter':
-        """
-        Create a FontFilter from a list of LineInfo objects.
-
-        Args:
-            line_info_list (List[LineInfo]): The list of LineInfo objects.
-            opts (Optional[FontFilterOptions]): The options for configuring the filter.
-
-        Returns:
-            FontFilter: The created FontFilter.
-        """
+    def from_line_info_list(cls, line_info_list: List[LineInfo], opts: Optional[Union[FontFilterOptions, Dict[str, Union[bool, float, Optional[re.Pattern]]]]] = None) -> 'FontFilter':
         if opts is None:
             opts = FontFilterOptions()
+        elif isinstance(opts, dict):
+            opts = FontFilterOptions(**opts)
         vars = FontFilterVars(
-            name="//".join([line_info.font for line_info in line_info_list]),
-            color="//".join([line_info.color for line_info in line_info_list]),
-            font_size=get_average([line_info.size for line_info in line_info_list]),
+            names=set().union(*(line_info.fonts for line_info in line_info_list)),
+            colors=set().union(*(line_info.colors for line_info in line_info_list)),
+            font_size=get_average([line_info.font_size for line_info in line_info_list]),
             char_width=get_average([line_info.char_width for line_info in line_info_list]),
             is_upper=all([line_info.text.isupper() for line_info in line_info_list]) if opts.ign_pattern is None 
-                        else all([re.sub(opts.ign_pattern, "", line_info.text).isupper() for line_info in line_info_list])
+                    else all([re.sub(opts.ign_pattern, "", line_info.text).isupper() for line_info in line_info_list])
         )
         return cls(vars, opts)
     
+    @overload
     @classmethod
     def from_dict(cls, fltr_dict: Dict[str, Union[str, float, bool]]) -> 'FontFilter':
-        """
-        Create a FontFilter from a dictionary.
+        ...
 
-        Args:
-            fltr_dict (Dict): The dictionary containing filter configuration.
+    @overload
+    @classmethod
+    def from_dict(cls, fltr_dict: Dict[str, Union[str, float, bool]], opts: Optional[FontFilterOptions]) -> 'FontFilter':
+        ...
 
-        Returns:
-            FontFilter: The created FontFilter.
-        """
-        opts = FontFilterOptions(
-            check_name=fltr_dict.get('check_name', True),
-            check_color=fltr_dict.get('check_color', True),
-            check_size=fltr_dict.get('check_size', True),
-            check_width=fltr_dict.get('check_width', True),
-            check_is_upper=fltr_dict.get('check_is_upper', False),
-            size_tolerance=fltr_dict.get('size_tolerance', DEF_TOLERANCE["font"]),
-            ign_pattern=fltr_dict.get('ign_pattern')
-        )
+    @classmethod
+    def from_dict(cls, fltr_dict: Dict[str, Union[str, float, bool]], opts: Optional[FontFilterOptions] = None) -> 'FontFilter':
+        if opts is None:
+            opts = FontFilterOptions(
+                check_names=fltr_dict.get('check_name', True),
+                check_colors=fltr_dict.get('check_color', True),
+                check_size=fltr_dict.get('check_size', True),
+                check_width=fltr_dict.get('check_width', True),
+                check_is_upper=fltr_dict.get('check_is_upper', False),
+                names_set_strict_equality=fltr_dict.get('names_set_strict_equality', True),
+                colors_set_strict_equality=fltr_dict.get('colors_set_strict_equality', True),
+                size_tolerance=fltr_dict.get('size_tolerance', DEF_TOLERANCE["font"]),
+                ign_pattern=fltr_dict.get('ign_pattern')
+            )
         vars = FontFilterVars(
-            name=fltr_dict.get('name'),
-            color=fltr_dict.get('color'),
+            names=fltr_dict.get('names'),
+            colors=fltr_dict.get('colors'),
             font_size=fltr_dict.get('font_size'),
             char_width=fltr_dict.get('char_width'),
             is_upper=fltr_dict.get('is_upper')
         )
         return cls(vars, opts)
-
+    
+    @dispatch(LineInfo)
     def admits(self, line_info: LineInfo) -> bool:
         """
         Check if a LineInfo object is admitted by the filter.
@@ -221,11 +224,15 @@ class FontFilter:
         Returns:
             bool: True if the LineInfo object is admitted, False otherwise.
         """
-        if self.opts.check_name and not self.vars.name in line_info.font:
+        if self.opts.check_names and not (self.vars.names == line_info.fonts \
+                                            if self.opts.names_set_strict_equality \
+                                                else self.vars.names.issubset(line_info.fonts)):
             return False
-        if self.opts.check_color and not self.vars.color in line_info.color:
+        if self.opts.check_colors and not (self.vars.colors == line_info.colors \
+                                            if self.opts.colors_set_strict_equality \
+                                                else self.vars.colors.issubset(line_info.colors)):
             return False
-        if self.opts.check_size and not admits_float(self.vars.font_size, line_info.size, self.opts.size_tolerance):
+        if self.opts.check_size and not admits_float(self.vars.font_size, line_info.font_size, self.opts.size_tolerance):
             return False
         if self.opts.check_width and not admits_float(self.vars.char_width, line_info.char_width, self.opts.size_tolerance):
             return False
@@ -233,7 +240,35 @@ class FontFilter:
                 else re.sub(self.opts.ign_pattern, "", line_info.text).isupper()):
             return False
         return True
+    
+    @dispatch(ParagraphInfo)
+    def admits(self, paragraph_info: ParagraphInfo) -> bool:
+        """
+        Check if a ParagraphInfo object is admitted by the filter.
 
+        Args:
+            paragraph_info (ParagraphInfo): The ParagraphInfo object.
+
+        Returns:
+            bool: True if the ParagraphInfo object is admitted, False otherwise.
+        """
+        if self.opts.check_names and not (self.vars.names == paragraph_info.fonts \
+                                            if self.opts.names_set_strict_equality \
+                                                else self.vars.names.issubset(paragraph_info.fonts)):
+            return False
+        if self.opts.check_colors and not (self.vars.colors == paragraph_info.colors \
+                                            if self.opts.colors_set_strict_equality \
+                                                else self.vars.colors.issubset(paragraph_info.colors)):
+            return False
+        if self.opts.check_size and not admits_float(self.vars.font_size, paragraph_info.font_size, self.opts.size_tolerance):
+            return False
+        if self.opts.check_width and not admits_float(self.vars.char_width, paragraph_info.char_width, self.opts.size_tolerance):
+            return False
+        if self.opts.check_is_upper and (self.vars.is_upper != paragraph_info.text.isupper() if self.opts.ign_pattern is None \
+                else re.sub(self.opts.ign_pattern, "", paragraph_info.text).isupper()):
+            return False
+        return True
+    
     def __repr__(self):
         return (f"FontFilter(vars={self.vars}, opts={self.opts})")
 
@@ -250,20 +285,32 @@ class BoundingBoxFilter:
         self.vars = vars
         self.opts = opts
 
+    @overload
     @classmethod
     def from_paragraph_info(cls, paragraph_info: ParagraphInfo, opts: Optional[BoundingBoxFilterOptions] = None) -> 'BoundingBoxFilter':
+        ...
+
+    @overload
+    @classmethod
+    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, opts: Optional[Dict[str, Union[bool, float]]] = None) -> 'BoundingBoxFilter':
+        ...
+
+    @classmethod
+    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, opts: Optional[Union[BoundingBoxFilterOptions, Dict[str, Union[bool, float]]]] = None) -> 'BoundingBoxFilter':
         """
         Create a BoundingBoxFilter from a ParagraphInfo object.
 
         Args:
             paragraph_info (ParagraphInfo): The ParagraphInfo object.
-            opts (Optional[BoundingBoxFilterOptions]): The options for configuring the filter.
+            opts (Optional[Union[BoundingBoxFilterOptions, Dict[str, Union[bool, float]]]]): The options for configuring the filter.
 
         Returns:
             BoundingBoxFilter: The created BoundingBoxFilter.
         """
         if opts is None:
             opts = BoundingBoxFilterOptions()
+        elif isinstance(opts, dict):
+            opts = BoundingBoxFilterOptions(**opts)
         vars = BoundingBoxFilterVars(
             left=paragraph_info.bbox[0],
             top=paragraph_info.bbox[1],
@@ -271,48 +318,33 @@ class BoundingBoxFilter:
             bottom=paragraph_info.bbox[3]
         )
         return cls(vars, opts)
-    
+
+    @overload
     @classmethod
     def from_line_info(cls, line_info: LineInfo, opts: Optional[BoundingBoxFilterOptions] = None) -> 'BoundingBoxFilter':
-        """
-        Create a BoundingBoxFilter from a LineInfo object.
+        ...
 
-        Args:
-            line_info (LineInfo): The LineInfo object.
-            opts (Optional[BoundingBoxFilterOptions]): The options for configuring the filter.
-
-        Returns:
-            BoundingBoxFilter: The created BoundingBoxFilter.
-        """
-        if opts is None:
-            opts = BoundingBoxFilterOptions()
-        vars = BoundingBoxFilterVars(
-            left=line_info.bbox[0],
-            top=line_info.bbox[1],
-            right=line_info.bbox[2],
-            bottom=line_info.bbox[3]
-        )
-        return cls(vars, opts)
-    
-    @override
+    @overload
     @classmethod
     def from_line_info(cls, line_info: LineInfo, opts: Optional[Dict[str, Union[bool, float]]] = None) -> 'BoundingBoxFilter':
+        ...
+
+    @classmethod
+    def from_line_info(cls, line_info: LineInfo, opts: Optional[Union[BoundingBoxFilterOptions, Dict[str, Union[bool, float]]]] = None) -> 'BoundingBoxFilter':
         """
         Create a BoundingBoxFilter from a LineInfo object.
 
         Args:
             line_info (LineInfo): The LineInfo object.
-            opts (Optional[Dict[str, Union[bool, float]]]): The options for configuring the filter.
+            opts (Optional[Union[BoundingBoxFilterOptions, Dict[str, Union[bool, float]]]]): The options for configuring the filter.
 
         Returns:
             BoundingBoxFilter: The created BoundingBoxFilter.
         """
-
         if opts is None:
             opts = BoundingBoxFilterOptions()
-        else:
+        elif isinstance(opts, dict):
             opts = BoundingBoxFilterOptions(**opts)
-
         vars = BoundingBoxFilterVars(
             left=line_info.bbox[0],
             top=line_info.bbox[1],
@@ -320,29 +352,50 @@ class BoundingBoxFilter:
             bottom=line_info.bbox[3]
         )
         return cls(vars, opts)
-    
+
+    @overload
     @classmethod
     def from_line_info_list(cls, line_info_list: List[LineInfo], opts: Optional[BoundingBoxFilterOptions] = None) -> 'BoundingBoxFilter':
+        ...
+
+    @overload
+    @classmethod
+    def from_line_info_list(cls, line_info_list: List[LineInfo], opts: Optional[Dict[str, Union[bool, float]]] = None) -> 'BoundingBoxFilter':
+        ...
+
+    @classmethod
+    def from_line_info_list(cls, line_info_list: List[LineInfo], opts: Optional[Union[BoundingBoxFilterOptions, Dict[str, Union[bool, float]]]] = None) -> 'BoundingBoxFilter':
         """
         Create a BoundingBoxFilter from a list of LineInfo objects.
 
         Args:
             line_info_list (List[LineInfo]): The list of LineInfo objects.
-            opts (Optional[BoundingBoxFilterOptions]): The options for configuring the filter.
+            opts (Optional[Union[BoundingBoxFilterOptions, Dict[str, Union[bool, float]]]]): The options for configuring the filter.
 
         Returns:
             BoundingBoxFilter: The created BoundingBoxFilter.
         """
         if opts is None:
             opts = BoundingBoxFilterOptions()
-        lines_bbox = concat_bboxes([line_info.bbox for line_info in line_info_list])
+        elif isinstance(opts, dict):
+            opts = BoundingBoxFilterOptions(**opts)
         vars = BoundingBoxFilterVars(
-            left=lines_bbox[0],
-            top=lines_bbox[1],
-            right=lines_bbox[2],
-            bottom=lines_bbox[3]
+            left=min(line_info.bbox[0] for line_info in line_info_list),
+            top=min(line_info.bbox[1] for line_info in line_info_list),
+            right=max(line_info.bbox[2] for line_info in line_info_list),
+            bottom=max(line_info.bbox[3] for line_info in line_info_list)
         )
         return cls(vars, opts)
+    
+    @overload
+    @classmethod
+    def from_dict(cls, fltr_dict: Dict[str, float]) -> 'BoundingBoxFilter':
+        ...
+    
+    @overload
+    @classmethod
+    def from_dict(cls, fltr_dict: Dict[str, float], opts: Optional[BoundingBoxFilterOptions]) -> 'BoundingBoxFilter':
+        ...
     
     @classmethod
     def from_dict(cls, fltr_dict: Dict[str, float]) -> 'BoundingBoxFilter':
@@ -392,8 +445,103 @@ class BoundingBoxFilter:
 
     def __repr__(self):
         return (f"BoundingBoxFilter(vars={self.vars}, opts={self.opts})")
-
     
+
+@dataclass
+class TextFilterOptions:
+    """Options for configuring the TextFilter."""
+    check_font: bool = True
+    check_bbox: bool = True
+
+@dataclass
+class TextFilterVars:
+    """Variables for the TextFilter."""
+    font: FontFilter
+    bbox: BoundingBoxFilter
+
+class TextFilter:
+    def __init__(self, vars: TextFilterVars, opts: TextFilterOptions):
+        """
+        Initialize a TextFilter.
+
+        Args:
+            vars (TextFilterVars): The variables for the filter.
+            opts (TextFilterOptions): The options for configuring the filter.
+        """
+        self.vars = vars
+        self.opts = opts
+
+    @classmethod
+    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, text_opts: Optional[TextFilterOptions] = None, font_opts: Optional[FontFilterOptions] = None, bbox_opts: Optional[BoundingBoxFilterOptions] = None) -> 'TextFilter':
+        """
+        Create a TextFilter from a ParagraphInfo object.
+
+        Args:
+            paragraph_info (ParagraphInfo): The ParagraphInfo object.
+            fltr_dict (Dict): The dictionary containing filter configuration.
+
+        Returns:
+            TextFilter: The created TextFilter.
+        """
+        opts = TextFilterOptions() if text_opts is None else text_opts
+
+        font_filter = FontFilter.from_paragraph_info(paragraph_info, font_opts)
+        bbox_filter = BoundingBoxFilter.from_paragraph_info(paragraph_info, bbox_opts)
+
+        vars = TextFilterVars(
+            font=font_filter,
+            bbox=bbox_filter
+        )
+
+        return cls(vars, opts)
+
+
+    @override
+    @classmethod
+    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, 
+                            fltr_dict: Dict[str, Union[bool, FontFilterOptions, BoundingBoxFilterOptions]]) -> 'TextFilter':
+        """
+        Create a TextFilter from a ParagraphInfo object.
+
+        Args:
+            paragraph_info (ParagraphInfo): The ParagraphInfo object.
+            fltr_dict (Dict): The dictionary containing filter configuration.
+
+        Returns:
+            TextFilter: The created TextFilter.
+        """
+        opts = TextFilterOptions(
+            check_font=fltr_dict.get('check_font', True),
+            check_bbox=fltr_dict.get('check_bbox', True)
+        )
+
+        font_filter = FontFilter.from_paragraph_info(paragraph_info, fltr_dict.get('font', {}))
+        bbox_filter = BoundingBoxFilter.from_paragraph_info(paragraph_info, fltr_dict.get('bbox', {}))
+
+        vars = TextFilterVars(
+            font=font_filter,
+            bbox=bbox_filter
+        )
+
+        return cls(vars, opts)
+    
+    def admits(self, paragraph: ParagraphInfo) -> bool:
+        """
+        Check if the filter admits the given LineInfo object.
+
+        Args:
+            line (LineInfo): The LineInfo object.
+
+        Returns:
+            bool: True if the LineInfo object is admitted, False otherwise.
+        """
+        if self.opts.check_font and not self.vars.font.admits():
+            return False
+        if self.opts.check_bbox and not self.vars.bbox.admits(line.bbox):
+            return False
+        return True
+    
+
 @dataclass
 class ToCFilterOptions:
     """Options for configuring the ToCFilter."""
@@ -583,3 +731,4 @@ class ToCFilter:
 
     def __repr__(self):
         return (f"ToCFilter(vars={self.vars}, opts={self.opts})")
+    

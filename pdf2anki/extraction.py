@@ -12,37 +12,36 @@ from typing import List, Tuple, Set
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-
-@dataclass
-class LineInfo:
-    text: str = ""
-    chars: List[dict] = field(default_factory=list)
-    bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
-    size: float = 0.0
-    font: str = ""
-    color: str = ""
-    char_width: float = 0.0
-    char_height: float = 0.0
-    split_end_word: bool = False
-
 @dataclass
 class CharInfo:
     text: str = ""
     bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     size: float = 0.0
-    font: str = ""
-    color: str = ""
     height: float = 0.0
     width: float = 0.0
+    font: str = ""
+    color: str = ""
+
+@dataclass
+class LineInfo:
+    text: str = ""
+    chars: List[CharInfo] = field(default_factory=list)
+    bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    font_size: float = 0.0
+    char_height: float = 0.0
+    char_width: float = 0.0
+    fonts: Set[str] = field(default_factory=set)
+    colors: Set[str] = field(default_factory=set)
+    split_end_word: bool = False
 
 @dataclass
 class ParagraphInfo:
     text: str = ""
     lines: List[LineInfo] = field(default_factory=list)
     bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
-    fonts: Set[str] = field(default_factory=set)
     font_size: float = 0.0
     char_width: float = 0.0
+    fonts: Set[str] = field(default_factory=set)
     colors: Set[str] = field(default_factory=set)
     split_end_line: bool = False
     is_indented: bool = False
@@ -108,9 +107,9 @@ def extract_line_info(line: List[CharInfo], interrupt_chars: str = "-") -> LineI
         text=line_text,
         chars=line,
         bbox=concat_bboxes([char.bbox for char in line]),
-        size=get_average([char.size for char in line]),
-        font=line[0].font,
-        color=line[0].color,
+        font_size=get_average([char.size for char in line]),
+        fonts=set([char.font for char in line]),
+        colors=set([char.color for char in line]),
         char_width=get_average([char.width for char in line]),
         char_height=get_average([char.height for char in line]),
         split_end_word=line_text.rstrip().endswith(interrupt_chars) and not line_text.rstrip().removesuffix(interrupt_chars)[-1].isspace(),
@@ -266,9 +265,9 @@ def is_header_continuation(line_a: LineInfo, line_b: LineInfo, tolerance_factors
     Returns:
         bool: True if line_b is a continuation of a header from line_a, False otherwise.
     """
-    header_font_size = line_a.size
+    header_font_size = line_a.font_size
     line_b_centered = is_centered(line_b, line_a.bbox[2] - line_a.bbox[0], tolerance_factor=tolerance_factors[0])
-    similar_font_size = abs(line_b.size - header_font_size) <= header_font_size*tolerance_factors[1]
+    similar_font_size = abs(line_b.font_size - header_font_size) <= header_font_size*tolerance_factors[1]
     return line_b_centered and similar_font_size
 
 def extract_paragraph_info(paragraph: List[LineInfo], indent_factor: float = 3.0) -> ParagraphInfo:
@@ -286,10 +285,10 @@ def extract_paragraph_info(paragraph: List[LineInfo], indent_factor: float = 3.0
         text=paragraph_text,
         lines=paragraph,
         bbox=concat_bboxes([line.bbox for line in paragraph]),
-        fonts=set([line.font for line in paragraph]),
-        colors = set([line.color for line in paragraph]),
+        fonts=set([line.fonts for line in paragraph]),
+        colors=set([line.colors for line in paragraph]),
         char_width=get_average([line.char_width for line in paragraph]),
-        font_size=get_average([line.size for line in paragraph]),
+        font_size=get_average([line.font_size for line in paragraph]),
         split_end_line=paragraph[-1].split_end_word,
         is_indented=is_indented(paragraph[1], paragraph[0], indent_factor=indent_factor) if len(paragraph) > 1 else False
     )

@@ -1,7 +1,6 @@
-
 import os
 from utils import log_time
-from typing import List, Optional, Tuple, Pattern
+from typing import List, Optional, Tuple, Pattern, Union
 from itertools import chain
 from pdfminer.layout import LTPage, LTTextBoxHorizontal, LTTextLineHorizontal, LTFigure, LTChar, LAParams
 from pdfminer.high_level import extract_pages
@@ -9,7 +8,8 @@ from pdfminer.pdfparser import PDFDocument
 from extraction import extract_lines_from_figure
 import re
 from filters import ToCFilter
-
+from pdf2anki.extraction import PageInfo, ParagraphInfo, LineInfo, CharInfo
+from pdf2anki.filters import ToCFilterVars, ToCFilterOptions
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Iterator, Tuple
 from itertools import chain
@@ -18,18 +18,16 @@ from fitz import Document
 
 @dataclass
 class ToCEntry:
-    def __init__(self, level, title, pagenum, vpos, bbox):
-        self.level = level
-        self.title = title
-        self.pagenum = pagenum
-        self.vpos = vpos  # Vertical position
-        self.bbox = bbox
-        self.text = ""
-        self.subsections = []
+    level: int
+    title: str
+    pagenum: int
+    vpos: float
+    bbox: Tuple[float, float, float, float]
+    text: str = ""
+    subsections: List["ToCEntry"] = None
 
     def __repr__(self):
         return f"ToCEntry(level={self.level}, title={self.title}, page={self.pagenum}, vpos={self.vpos}, bbox={self.bbox}, text={self.text})"
-
 
 
 class FoundGreedy(Exception):
@@ -128,86 +126,114 @@ def concatFrag(frags: Iterator[Optional[Fragment]], sep: str = " ") -> Dict[int,
 
 
 class Recipe:
-    """The internal representation of a recipe"""
+    """The internal representation of a recipe using dataclasses."""
     filters: List[ToCFilter]
 
-    def __init__(self, recipe_dict: dict):
-        fltr_dicts = recipe_dict.get('heading', [])
+    def __init__(self, recipe_list: List[List[ToCFilterVars, ToCFilterOptions]]):
+        fltr_dicts = recipe_.get('heading', [])
 
-        if len(fltr_dicts) == 0:
+        if not fltr_dicts:
             raise ValueError("no filters found in recipe")
         self.filters = [ToCFilter(fltr) for fltr in fltr_dicts]
 
-  
-
-    def _extract_line(self, line: dict) -> List[Optional[Fragment]]:
-        """Extract matching heading fragments in a line.
-
-        Argument
-          line: a line dictionary
-          {
-            'bbox': (float, float, float, float),
-            'wmode': int,
-            'dir': (float, float),
-            'spans': [dict]
-          }
-        Returns
-          a list of fragments concatenated from result in a line
+    @classmethod
+    def from_dict_list(cls, data: List[Dict]):
         """
-        for fltr in self.filters:
-            if fltr.admits(line):
-                text = ''.join([span['text'] for span in line.get('spans', {})])
-                bbox = line.get('bbox', (0, 0, 0, 0))
-
-                if not text:
-                    # don't match empty spaces
-                    return None
-
-                if fltr.greedy:
-                    # propagate all the way back to extract_block
-                    raise FoundGreedy(fltr.level)
-
-                return [Fragment(char['text'], fltr.level, bbox) for char in line.get('chars', {})]
-        return [None for _ in range(len(line.get("chars", {})))]
-
-    def extract_paragraph(self, block: dict, page: int) -> List[ToCEntry]:
-        """Extract matching headings in a block.
-
-        Argument
-          block: a block dictionary
-          {
-            'bbox': (float, float, float, float),
-            'lines': [dict],
-            'type': int
-          }
-        Returns
-          a list of toc entries, concatenated from the result of lines
+        Initialize Recipe from a list of dictionaries.
         """
-        if block.get('type') != 0:
-            # not a text block
-            return []
-        
-        bbox = block.get('bbox', (0, 0, 0, 0))
-        vpos = bbox[1]
+        recipe_dict = {"heading": data}
+        return cls(recipe_dict)
 
+    @classmethod
+    def from_nested_list(cls, data: List[List[Union[ToCFilterVars, ToCFilterOptions]]]):
+        """
+        Initialize Recipe from a nested list structure.
+        """
+        recipe_dict = {"heading": []}
+        for sublist in data:
+            for item in sublist:
+                filter_dict = {
+                    "level": item.var,
+                    "font": item.options.font,
+                    "size": item.options.size,
+                    "color": item.options.color,
+                    "char_width": item.options.char_width,
+                    "is_upper": item.options.is_upper,
+                    "bbox": item.options.bbox,
+                    "greedy": item.options.greedy
+                }
+                recipe_dict["heading"].append(filter_dict)
+        return cls(recipe_dict)
+
+    def extract_meta(self, pages: List[PageInfo]):
+        """
+        Extract meta information from a list of PageInfo objects.
+        """
+        for page in pages:
+            meta = self.search_in_page(page)
+            # Process meta as needed
+
+    def generate_recipe(self, pages: List[PageInfo]):
+        """
+        Generate a recipe from a list of PageInfo objects.
+        """
+        self.extract_meta(pages)
+        # Additional logic to generate recipe
+
+    def search_in_page(self, page: PageInfo) -> List[Fragment]:
+        """
+        Search a single PageInfo object for relevant data.
+        """
+        fragments = []
+        for paragraph in page.paragraphs:
+            for line in paragraph.lines:
+                fragments.extend(self._extract_line(line))
+        return fragments
+
+    def extract_page(self, page: PageInfo) -> List[ToCEntry]:
+        """
+        Iteratively call extract_paragraph for each paragraph in a PageInfo and return list of ToCEntries.
+        """
+        toc_entries = []
+        for paragraph in page.paragraphs:
+            entry = self.extract_paragraph(paragraph, page.page_number)
+            if entry:
+                toc_entries.append(entry)
+        return toc_entries
+
+    def extract_paragraph(self, paragraph: ParagraphInfo, pagenum: int) -> Optional[ToCEntry]:
+        """
+        Extract a paragraph into a ToCEntry using ParagraphInfo dataclass.
+        """
         try:
             frags = chain.from_iterable([
-                self._extract_line(ln) for ln in block.get('lines')
+                self._extract_line(line) for line in paragraph.lines
             ])
             titles = concatFrag(frags)
-            return [
-                ToCEntry(level, title, page, bbox[1], bbox)
-                for level, (title, bbox) in titles.items()
-            ]
+            return ToCEntry(
+                level=titles['level'],
+                title=titles['title'],
+                pagenum=pagenum,
+                vpos=paragraph.vpos,
+                bbox=paragraph.bbox,
+                text=paragraph.text,
+                subsections=[]
+            )
         except FoundGreedy as e:
-            # return the entire block as a single entry
-            print(f"FoundGreedy exception: {e}")
-            return [ToCEntry(0, block.get('text', ''), page, vpos, bbox)]
+            # Handle greedy extraction
+            return ToCEntry(
+                level=0,
+                title=paragraph.text,
+                pagenum=pagenum,
+                vpos=paragraph.vpos,
+                bbox=paragraph.bbox
+            )
+
 
 @log_time
 def search_in_page(regex: re.Pattern, 
                    page_num: int, 
-                   page: LTPage, 
+                   page: PageInfo, 
                    ign_pattern: Optional[Pattern] = None, 
                    char_margin_factor: float = 0.5, 
                    clip: Optional[Tuple[float]] = None) -> List[dict]:
@@ -246,7 +272,7 @@ def search_in_page(regex: re.Pattern,
     return result
 
 @log_time
-def extract_meta(doc: List[LTPage], 
+def extract_meta(doc: List[PageInfo], 
                  pattern: str, 
                  page_numbers: Optional[List[int]] = None,
                  ign_case: bool = False, 
@@ -268,7 +294,7 @@ def extract_meta(doc: List[LTPage],
     return meta
 
 
-def generate_recipe(doc: List[LTPage], 
+def generate_recipe(doc: List[PageInfo], 
                     headers: List[Tuple[str, int, int]], 
                     page_numbers: List[int] = None,
                     tolerances: dict = {"font": 1e-1, "bbox": 1e-1}, 
@@ -318,7 +344,7 @@ def generate_recipe(doc: List[LTPage],
     return recipe
 
 @log_time
-def extract_toc(doc: List[LTPage], recipe: Recipe, page_range=None):
+def extract_toc(doc: List[PageInfo], recipe: Recipe, page_range=None):
     toc_entries = []
     if page_range is None:
         page_range = [0, len(doc) - 1]
