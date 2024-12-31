@@ -378,8 +378,9 @@ def main():
     params = LAParams(line_margin=0.5, char_margin=2.0, line_overlap=0.5)
     page_range = [16, 60]
     text_doc = list(extract_pages(pdf_path, laparams=params, maxpages=page_range[1]))
-    toc_entries = extract_toc(text_doc, recipe, page_range=page_range)
-    merged_toc_entries = merge_toc_entries(toc_entries, tolerance=30)
+    # recipe = generate_recipe(text_doc, [("Table of Contents", 1, 16)], page_numbers=range(16, 60))
+    # toc_entries = extract_toc(text_doc, recipe, page_range=page_range)
+    # merged_toc_entries = merge_toc_entries(toc_entries, tolerance=30)
 
 if __name__ == "__main__":
     main()

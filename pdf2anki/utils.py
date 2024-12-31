@@ -1,6 +1,8 @@
 import logging
 import time
-from typing import List, Set
+from typing import List, Set, Tuple
+
+from pdf2anki.tests.test_utils import *
 
 def log_time(func):
     """Decorator to log the time a function takes to run."""
@@ -38,9 +40,25 @@ def get_all_numbers_within_tolerance(numbers: List[float], number: float, tolera
     """
     return [num for num in numbers if abs(num - number) <= tolerance]
 
+def get_average_L1_distances_from_number(numbers: List[float], number: float) -> float:
+    """
+    Calculate the average L1 distance of a list of numbers from a given number.
+
+    Args:
+        numbers (List[float]): The list of numbers.
+        number (float): The number to compare against.
+
+    Returns:
+        float: The average L1 distance of the numbers from the given number.
+    """
+    if numbers:
+        return sum(abs(num - number) for num in numbers) / len(numbers)
+    else:
+        return 0
+
 def get_all_indices_within_tolerance(sorted_numbers: List[float], number: float, tolerance: float) -> List[int]:
     """
-    Get the indices of all numbers within a tolerance of a given number.
+    Get the indices of all numbers within a tolerance of a given number and the average L1 distance.
 
     Args:
         sorted_numbers (List[float]): The list of sorted numbers to search.
@@ -48,30 +66,54 @@ def get_all_indices_within_tolerance(sorted_numbers: List[float], number: float,
         tolerance (float): The tolerance value.
 
     Returns:
-        List[int]: A list of indices of numbers within the tolerance of the given number.
+        Tuple[float, List[int]]: A tuple containing the average distance and the list of indices of numbers within the tolerance of the given number.
     """
     # binary search to find the start and end indices
     left = 0
     right = len(sorted_numbers) - 1
-    while left < right:
+    while left <= right:
         mid = (left + right) // 2
         if sorted_numbers[mid] < number - tolerance:
             left = mid + 1
         else:
-            right = mid
+            right = mid - 1
     start = left
     left = 0
     right = len(sorted_numbers) - 1
-    while left < right:
+    while left <= right:
         mid = (left + right) // 2
-        if sorted_numbers[mid] < number + tolerance:
+        if sorted_numbers[mid] <= number + tolerance:
             left = mid + 1
         else:
-            right = mid
+            right = mid - 1
     end = left
-    return set(range(start, end))
-    
+    indices = set(range(start, end))
+    avg_l1_distance = get_average_L1_distances_from_number([sorted_numbers[i] for i in indices if sorted_numbers[i] != number], number)
+    return avg_l1_distance, indices
 
+def remove_duplicate_sets(data: List[Tuple[float, Set[int]]]) -> List[Tuple[float, Set[int]]]:
+    """
+    Remove elements with duplicate sets from a list of tuples containing a float and a set.
+
+    Args:
+        data (List[Tuple[float, Set[int]]]): The list of tuples to process.
+
+    Returns:
+        List[Tuple[float, Set[int]]]: A list with duplicate sets removed.
+    """
+    seen_sets = {}
+    unique_data = []
+
+    for item in data:
+        value, group_set = item
+        frozen_set = frozenset(group_set)  # Convert set to frozenset to make it hashable
+        if frozen_set not in seen_sets:
+            seen_sets[frozen_set] = value
+            unique_data.append(item)
+
+    return unique_data
+
+    
 
 def get_averages(numbers: List[float], tolerance: float) -> List[List[float]]:
     """
@@ -93,24 +135,33 @@ def get_averages(numbers: List[float], tolerance: float) -> List[List[float]]:
     # averages = [sorted_numbers[0]]
     # groups = [[sorted_numbers[0]]]
 
-    group_indices: List[Set[int]] = [[]]
+    group_indices: List[Set[int]] = []
 
     for number in sorted_numbers:
         group_indices.append(get_all_indices_within_tolerance(sorted_numbers, number, tolerance))
-
-    sorted_group_indices = sorted(group_indices, key=lambda x: len(x), reverse=True)
+    
+    l1_distance_factor = 0.5
+    group_size_factor = 0.5
+    
+    sorted_group_indices = sorted(group_indices, key=lambda x: group_size_factor*len(x[1]) - l1_distance_factor*x[0] , reverse=True)
     grouped_unique_indices = set()
     average_indices = []
+    
+    unique_sorted_group_indices = remove_duplicate_sets(sorted_group_indices)
 
-    for group in sorted_group_indices:
-        unique_group = group - grouped_unique_indices
-        if unique_group:
-            grouped_unique_indices |= unique_group
-            average_indices.append(unique_group)
-        else:
-            break
+    for _, group in unique_sorted_group_indices:
+        unique_group_indices = group - grouped_unique_indices
+        if unique_group_indices:
+            grouped_unique_indices |= unique_group_indices
+            average_indices.append(unique_group_indices)
 
-    averages = [get_average([sorted_numbers[i] for i in group]) for group in average_indices]
+    averages = sorted([get_average([sorted_numbers[i] for i in group]) for group in average_indices])
 
     return averages
 
+def main():
+    # test_get_averages_multiple_groups()
+    test_get_averages_exact_partition()
+
+if __name__ == "__main__":
+    main()

@@ -25,7 +25,7 @@ def test_get_averages_multiple_groups():
 
 def test_get_averages_exact_partition():
     nums = [10, 20, 21, 22, 100, 110]
-    result = get_averages(nums, tolerance=2)
+    result = get_averages(nums, tolerance=10)
     # Groups should be [10], [20, 21, 22], [100, 110]
     assert len(result) == 3
     # Approx checks: first ~10, second ~21, third ~105
