@@ -5,7 +5,7 @@ import time
 from typing import Dict, List, Optional, Set, Tuple
 from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTPage, LAParams, LTChar, LTTextBoxHorizontal, LTTextLineHorizontal, LTFigure
-from utils import log_time
+from pdf2anki.utils import log_time, get_averages, get_average
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -41,7 +41,7 @@ class ParagraphInfo:
     fonts: Set[str]
     colors: Set[str]
     char_width: float
-    size: float
+    font_size: float
     split_end_line: bool
     is_indented: bool
 
@@ -50,22 +50,12 @@ class PageInfo:
     text: str
     bbox: Tuple[float]
     fonts: Set[str]
-    sizes: Set[float]
+    font_sizes: Set[float]
     colors: Set[str]
     paragraphs: List[ParagraphInfo]
     split_end_paragraph: bool
     pagenum: int
 
-def get_average(numbers):
-    """
-    Calculate the average of a list of numbers.
-
-    :param numbers: List of numbers
-    :return: Average of the numbers
-    """
-    if not numbers:
-        return 0
-    return sum(numbers) / len(numbers)
 
 def concat_bboxes(bboxes: List[Tuple[float]]) -> Tuple[float]:
     """
@@ -310,7 +300,7 @@ def extract_paragraph_info(paragraph: List[LineInfo], indent_factor: float = 3.0
         fonts=set([line.font for line in paragraph]),
         colors = set([line.color for line in paragraph]),
         char_width=get_average([line.char_width for line in paragraph]),
-        size=get_average([line.size for line in paragraph]),
+        font_size=get_average([line.size for line in paragraph]),
         split_end_line=paragraph[-1].split_end_word,
         is_indented=is_indented(paragraph[1], paragraph[0], indent_factor=indent_factor) if len(paragraph) > 1 else False
     )
@@ -330,10 +320,12 @@ def extract_page_info(page: List[ParagraphInfo], pagenum: int) -> PageInfo:
         text=page_text,
         bbox=concat_bboxes([paragraph.bbox for paragraph in page]),
         fonts=set([font for paragraph in page for font in paragraph.fonts]),
-        sizes=set([size for paragraph in page for size in paragraph.size]),
+        font_sizes=get_averages([size for paragraph in page for size in paragraph.font_size]),
+        char_widths=get_averages([width for paragraph in page for width in paragraph.char_width]),
         colors=set([color for paragraph in page for color in paragraph.colors]),
         paragraphs=page,
         split_end_paragraph=page[-1].split_end_line,
+        starts_with_indent=page[0].is_indented,
         pagenum=pagenum
     )
         
