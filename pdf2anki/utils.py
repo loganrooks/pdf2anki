@@ -2,7 +2,7 @@ import logging
 import time
 from typing import List, Set, Tuple
 
-from pdf2anki.tests.test_utils import *
+# from pdf2anki.tests.test_utils import test_get_averages_exact_partition, test_get_averages_multiple_groups
 
 def log_time(func):
     """Decorator to log the time a function takes to run."""
@@ -208,7 +208,8 @@ def contained_in_bbox(bbox1: Tuple[float], bbox2: Tuple[float], bbox_overlap: fl
 
 def main():
     # test_get_averages_multiple_groups()
-    test_get_averages_exact_partition()
+    # test_get_averages_exact_partition()
+    pass
 
 if __name__ == "__main__":
     main()

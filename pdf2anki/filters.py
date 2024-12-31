@@ -8,7 +8,7 @@ from re import Pattern
 
 import re
 from typing import Dict, Optional, Tuple, Union, List, override
-from extraction import ParagraphInfo, LineInfo
+from pdf2anki.extraction import ParagraphInfo, LineInfo
 from dataclasses import dataclass
 from collections import Counter
 

@@ -6,6 +6,8 @@ from typing import Dict, List, Optional, Set, Tuple
 from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTPage, LAParams, LTChar, LTTextBoxHorizontal, LTTextLineHorizontal, LTFigure
 from pdf2anki.utils import log_time, get_averages, get_average, concat_bboxes, contained_in_bbox
+from dataclasses import dataclass, field
+from typing import List, Tuple, Set
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -13,49 +15,49 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 @dataclass
 class LineInfo:
-    text: str
-    chars: List[dict]
-    bbox: Tuple[float]
-    size: float
-    font: str
-    color: str
-    char_width: float
-    char_height: float
-    split_end_word: bool
+    text: str = ""
+    chars: List[dict] = field(default_factory=list)
+    bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    size: float = 0.0
+    font: str = ""
+    color: str = ""
+    char_width: float = 0.0
+    char_height: float = 0.0
+    split_end_word: bool = False
 
 @dataclass
 class CharInfo:
-    text: str
-    bbox: Tuple[float]
-    size: float
-    font: str
-    color: str
-    height: float
-    width: float
+    text: str = ""
+    bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    size: float = 0.0
+    font: str = ""
+    color: str = ""
+    height: float = 0.0
+    width: float = 0.0
 
 @dataclass
 class ParagraphInfo:
-    text: str
-    lines: List[LineInfo]
-    bbox: Tuple[float]
-    fonts: Set[str]
-    font_size: float
-    char_width: float
-    colors: Set[str]
-    split_end_line: bool
-    is_indented: bool
+    text: str = ""
+    lines: List[LineInfo] = field(default_factory=list)
+    bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    fonts: Set[str] = field(default_factory=set)
+    font_size: float = 0.0
+    char_width: float = 0.0
+    colors: Set[str] = field(default_factory=set)
+    split_end_line: bool = False
+    is_indented: bool = False
 
 @dataclass
 class PageInfo:
-    text: str
-    bbox: Tuple[float]
-    fonts: Set[str]
-    font_sizes: Set[float]
-    char_widths: Set[float]
-    colors: Set[str]
-    paragraphs: List[ParagraphInfo]
-    split_end_paragraph: bool
-    pagenum: int
+    text: str = ""
+    bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    fonts: Set[str] = field(default_factory=set)
+    font_sizes: Set[float] = field(default_factory=set)
+    char_widths: Set[float] = field(default_factory=set)
+    colors: Set[str] = field(default_factory=set)
+    paragraphs: List[ParagraphInfo] = field(default_factory=list)
+    split_end_paragraph: bool = False
+    pagenum: int = 0
     
     
 
@@ -252,7 +254,7 @@ def is_centered(line: LineInfo, bbox: Tuple[float], tolerance_factor: float = 0.
     bbox_width = bbox[2] - bbox[0]
     return abs(line_center - bbox_center) <= tolerance_factor * bbox_width
 
-def is_header_continuation(line_a: LineInfo, line_b: LineInfo, tolerance_factors: List[float, float] = [0.001, 0.1]) -> bool:
+def is_header_continuation(line_a: LineInfo, line_b: LineInfo, tolerance_factors: List[float] = [0.001, 0.1]) -> bool:
     """
     Check if line_b is a continuation of a header from line_a.
 
