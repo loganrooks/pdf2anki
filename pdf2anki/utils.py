@@ -159,6 +159,53 @@ def get_averages(numbers: List[float], tolerance: float) -> List[List[float]]:
 
     return averages
 
+def concat_bboxes(bboxes: List[Tuple[float]]) -> Tuple[float]:
+    """
+    Concatenate a list of bounding boxes into a single bounding box.
+
+    Args:
+        bboxes (list): A list of bounding boxes.
+
+    Returns:
+        tuple: A single bounding box that encompasses all the input bounding boxes.
+    """
+    x0 = min(bbox[0] for bbox in bboxes)
+    y0 = min(bbox[1] for bbox in bboxes)
+    x1 = max(bbox[2] for bbox in bboxes)
+    y1 = max(bbox[3] for bbox in bboxes)
+    return (x0, y0, x1, y1)
+
+def contained_in_bbox(bbox1: Tuple[float], bbox2: Tuple[float], bbox_overlap: float = 1.0) -> bool:
+    """
+    Check if bbox1 is contained in bbox2 based on the overlap percentage.
+
+    Args:
+        bbox1 (tuple): Bounding box 1.
+        bbox2 (tuple): Bounding box 2.
+        bbox_overlap (float): Overlap percentage of bbox1's area that must be in bbox2.
+
+    Returns:
+        bool: True if bbox1 is contained in bbox2, False otherwise.
+    """
+    x1, y1, x2, y2 = bbox1
+    x3, y3, x4, y4 = bbox2
+
+    # Calculate the area of bbox1
+    area1 = (x2 - x1) * (y2 - y1)
+
+    # Calculate the intersection area
+    inter_x1 = max(x1, x3)
+    inter_y1 = max(y1, y3)
+    inter_x2 = min(x2, x4)
+    inter_y2 = min(y2, y4)
+
+    if inter_x1 < inter_x2 and inter_y1 < inter_y2:
+        intersection_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+    else:
+        intersection_area = 0
+
+    return intersection_area >= bbox_overlap * area1
+
 def main():
     # test_get_averages_multiple_groups()
     test_get_averages_exact_partition()

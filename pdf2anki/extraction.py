@@ -5,7 +5,7 @@ import time
 from typing import Dict, List, Optional, Set, Tuple
 from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTPage, LAParams, LTChar, LTTextBoxHorizontal, LTTextLineHorizontal, LTFigure
-from pdf2anki.utils import log_time, get_averages, get_average
+from pdf2anki.utils import log_time, get_averages, get_average, concat_bboxes, contained_in_bbox
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -39,9 +39,9 @@ class ParagraphInfo:
     lines: List[LineInfo]
     bbox: Tuple[float]
     fonts: Set[str]
-    colors: Set[str]
-    char_width: float
     font_size: float
+    char_width: float
+    colors: Set[str]
     split_end_line: bool
     is_indented: bool
 
@@ -51,58 +51,11 @@ class PageInfo:
     bbox: Tuple[float]
     fonts: Set[str]
     font_sizes: Set[float]
+    char_widths: Set[float]
     colors: Set[str]
     paragraphs: List[ParagraphInfo]
     split_end_paragraph: bool
     pagenum: int
-
-
-def concat_bboxes(bboxes: List[Tuple[float]]) -> Tuple[float]:
-    """
-    Concatenate a list of bounding boxes into a single bounding box.
-
-    Args:
-        bboxes (list): A list of bounding boxes.
-
-    Returns:
-        tuple: A single bounding box that encompasses all the input bounding boxes.
-    """
-    x0 = min(bbox[0] for bbox in bboxes)
-    y0 = min(bbox[1] for bbox in bboxes)
-    x1 = max(bbox[2] for bbox in bboxes)
-    y1 = max(bbox[3] for bbox in bboxes)
-    return (x0, y0, x1, y1)
-
-def contained_in_bbox(bbox1: Tuple[float], bbox2: Tuple[float], bbox_overlap: float = 1.0) -> bool:
-    """
-    Check if bbox1 is contained in bbox2 based on the overlap percentage.
-
-    Args:
-        bbox1 (tuple): Bounding box 1.
-        bbox2 (tuple): Bounding box 2.
-        bbox_overlap (float): Overlap percentage of bbox1's area that must be in bbox2.
-
-    Returns:
-        bool: True if bbox1 is contained in bbox2, False otherwise.
-    """
-    x1, y1, x2, y2 = bbox1
-    x3, y3, x4, y4 = bbox2
-
-    # Calculate the area of bbox1
-    area1 = (x2 - x1) * (y2 - y1)
-
-    # Calculate the intersection area
-    inter_x1 = max(x1, x3)
-    inter_y1 = max(y1, y3)
-    inter_x2 = min(x2, x4)
-    inter_y2 = min(y2, y4)
-
-    if inter_x1 < inter_x2 and inter_y1 < inter_y2:
-        intersection_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
-    else:
-        intersection_area = 0
-
-    return intersection_area >= bbox_overlap * area1
     
     
 
@@ -282,6 +235,40 @@ def is_indented(line_a: LineInfo, line_b: LineInfo, indent_factor: float = 3.0) 
     indent = line_b.bbox[0] - line_a.bbox[0]
     return indent >= indent_factor * line_a.char_width
 
+def is_centered(line: LineInfo, bbox: Tuple[float], tolerance_factor: float = 0.001) -> bool:
+    """
+    Check if a line is centered in the bounding box.
+
+    Args:
+        line (LineInfo): Information about the line.
+        bbox (Tuple[float]): The bounding box that the line must be centered in.
+        tolerance_factor (float): The percentage of the page width that the line must be centered within.
+
+    Returns:
+        bool: True if the line is centered, False otherwise.
+    """
+    line_center = (line.bbox[0] + line.bbox[2]) / 2
+    bbox_center = (bbox[0] + bbox[2]) / 2
+    bbox_width = bbox[2] - bbox[0]
+    return abs(line_center - bbox_center) <= tolerance_factor * bbox_width
+
+def is_header_continuation(line_a: LineInfo, line_b: LineInfo, tolerance_factors: List[float, float] = [0.001, 0.1]) -> bool:
+    """
+    Check if line_b is a continuation of a header from line_a.
+
+    Args:
+        line_a (LineInfo): Information about the first line.
+        line_b (LineInfo): Information about the second line.
+        tolerance_factors (List[float, float]): Tolerance factors for the centering and character width.
+
+    Returns:
+        bool: True if line_b is a continuation of a header from line_a, False otherwise.
+    """
+    header_font_size = line_a.size
+    line_b_centered = is_centered(line_b, line_a.bbox[2] - line_a.bbox[0], tolerance_factor=tolerance_factors[0])
+    similar_font_size = abs(line_b.size - header_font_size) <= header_font_size*tolerance_factors[1]
+    return line_b_centered and similar_font_size
+
 def extract_paragraph_info(paragraph: List[LineInfo], indent_factor: float = 3.0) -> ParagraphInfo:
     """
     Extract information from a list of LineInfo elements that form a paragraph.
@@ -328,7 +315,7 @@ def extract_page_info(page: List[ParagraphInfo], pagenum: int) -> PageInfo:
         starts_with_indent=page[0].is_indented,
         pagenum=pagenum
     )
-        
+
 
 
 @log_time
@@ -352,14 +339,15 @@ def extract_paragraphs_from_page(page: LTPage,
                 line_gap = last_line.bbox[1] - line.bbox[3]
                 max_line_gap = line.char_height * line_margin_factor
                 
-                if line_gap <= max_line_gap and not is_indented(last_line, line, indent_factor=indent_factor):
-                    current_paragraph.append(line)
-                    last_line = line
-                else:
+                if line_gap > max_line_gap or (is_indented(last_line, line, indent_factor=indent_factor) and not is_header_continuation(last_line, line)):
                     current_paragraph_info = extract_paragraph_info(current_paragraph, indent_factor=indent_factor)
                     paragraphs.append(current_paragraph_info)
                     current_paragraph = [line]
                     last_line = line
+                else:
+                    current_paragraph.append(line)
+                    last_line = line
+                    
 
     if current_paragraph:
         paragraph_info = extract_paragraph_info(current_paragraph, indent_factor=indent_factor)
