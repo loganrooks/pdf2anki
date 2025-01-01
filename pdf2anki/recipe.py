@@ -9,25 +9,12 @@ from extraction import extract_lines_from_figure
 import re
 from filters import ToCFilter
 from pdf2anki.extraction import PageInfo, ParagraphInfo, LineInfo, CharInfo
-from pdf2anki.filters import ToCFilterVars, ToCFilterOptions
+from pdf2anki.filters import ToCFilterVars, ToCFilterOptions, ToCEntry
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Iterator, Tuple
 from itertools import chain
 from collections import defaultdict
-from fitz import Document
 
-@dataclass
-class ToCEntry:
-    level: int
-    title: str
-    pagenum: int
-    vpos: float
-    bbox: Tuple[float, float, float, float]
-    text: str = ""
-    subsections: List["ToCEntry"] = None
-
-    def __repr__(self):
-        return f"ToCEntry(level={self.level}, title={self.title}, page={self.pagenum}, vpos={self.vpos}, bbox={self.bbox}, text={self.text})"
 
 
 class FoundGreedy(Exception):
@@ -130,7 +117,7 @@ class Recipe:
     filters: List[ToCFilter]
 
     def __init__(self, recipe_list: List[List[ToCFilterVars, ToCFilterOptions]]):
-        fltr_dicts = recipe_.get('heading', [])
+        fltr_dicts = recipe_list.get('heading', [])
 
         if not fltr_dicts:
             raise ValueError("no filters found in recipe")
@@ -213,7 +200,7 @@ class Recipe:
             return ToCEntry(
                 level=titles['level'],
                 title=titles['title'],
-                pagenum=pagenum,
+                page_range=pagenum,
                 vpos=paragraph.vpos,
                 bbox=paragraph.bbox,
                 text=paragraph.text,
@@ -224,7 +211,7 @@ class Recipe:
             return ToCEntry(
                 level=0,
                 title=paragraph.text,
-                pagenum=pagenum,
+                page_range=pagenum,
                 vpos=paragraph.vpos,
                 bbox=paragraph.bbox
             )

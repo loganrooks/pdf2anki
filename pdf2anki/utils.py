@@ -206,6 +206,21 @@ def contained_in_bbox(bbox1: Tuple[float], bbox2: Tuple[float], bbox_overlap: fl
 
     return intersection_area >= bbox_overlap * area1
 
+def get_y_overlap(bbox1: Tuple[float], bbox2: Tuple[float]) -> float:
+    """
+    Calculate the vertical overlap between two bounding boxes.
+
+    Args:
+        bbox1 (tuple): Bounding box 1.
+        bbox2 (tuple): Bounding box 2.
+
+    Returns:
+        float: The vertical overlap between the two bounding boxes.
+    """
+    y1, y2 = bbox1[1], bbox1[3]
+    y3, y4 = bbox2[1], bbox2[3]
+    return min(y2, y4) - max(y1, y3)
+
 def main():
     # test_get_averages_multiple_groups()
     # test_get_averages_exact_partition()

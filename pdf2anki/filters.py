@@ -12,11 +12,24 @@ from pdf2anki.extraction import ParagraphInfo, LineInfo
 from dataclasses import dataclass
 from multipledispatch import dispatch
 
-from pdf2anki.utils import get_average, concat_bboxes
+from pdf2anki.utils import contained_in_bbox, get_average, concat_bboxes, get_y_overlap
 
-DEF_TOLERANCE: dict = {"font": 1e-1, "bbox": 1e-1}
+DEF_TOLERANCE: dict = {"font": 1e-1, "bbox": 1e-1, "text": 1e-1}
 
+@dataclass
+class ToCEntry:
+    level: int
+    title: str
+    pagenum: int
+    bbox: Tuple[float, float, float, float]
+    page_range: Optional[List[int]] = None
+    start_vpos: Optional[float] = None
+    end_vpos: Optional[float] = None
+    text: Optional[str] = None
+    subsections: Optional[List["ToCEntry"]] = None
 
+    def __repr__(self):
+        return f"ToCEntry(level={self.level}, title={self.title}, page={self.page_range}, vpos={self.vpos}, bbox={self.bbox}, text={self.text})"
 
 @dataclass
 class FontFilterOptions:
@@ -49,6 +62,7 @@ class BoundingBoxFilterOptions:
     check_top: bool = True
     check_right: bool = True
     check_bottom: bool = True
+    require_equality: bool = False
     tolerance: float = DEF_TOLERANCE["bbox"]
 
 @dataclass
@@ -313,9 +327,9 @@ class BoundingBoxFilter:
             opts = BoundingBoxFilterOptions(**opts)
         vars = BoundingBoxFilterVars(
             left=paragraph_info.bbox[0],
-            top=paragraph_info.bbox[1],
+            bottom=paragraph_info.bbox[1],
             right=paragraph_info.bbox[2],
-            bottom=paragraph_info.bbox[3]
+            top=paragraph_info.bbox[3]
         )
         return cls(vars, opts)
 
@@ -347,9 +361,9 @@ class BoundingBoxFilter:
             opts = BoundingBoxFilterOptions(**opts)
         vars = BoundingBoxFilterVars(
             left=line_info.bbox[0],
-            top=line_info.bbox[1],
+            bottom=line_info.bbox[1],
             right=line_info.bbox[2],
-            bottom=line_info.bbox[3]
+            top=line_info.bbox[3]
         )
         return cls(vars, opts)
 
@@ -381,9 +395,9 @@ class BoundingBoxFilter:
             opts = BoundingBoxFilterOptions(**opts)
         vars = BoundingBoxFilterVars(
             left=min(line_info.bbox[0] for line_info in line_info_list),
-            top=min(line_info.bbox[1] for line_info in line_info_list),
+            bottom=min(line_info.bbox[1] for line_info in line_info_list),
             right=max(line_info.bbox[2] for line_info in line_info_list),
-            bottom=max(line_info.bbox[3] for line_info in line_info_list)
+            top=max(line_info.bbox[3] for line_info in line_info_list)
         )
         return cls(vars, opts)
     
@@ -422,6 +436,41 @@ class BoundingBoxFilter:
             bottom=fltr_dict.get('bottom')
         )
         return cls(vars, opts)
+    
+    @overload
+    @classmethod
+    def from_tuple(cls, bbox: Tuple[float, float, float, float], opts: Optional[BoundingBoxFilterOptions] = None) -> 'BoundingBoxFilter': 
+        ...
+
+    @overload
+    @classmethod
+    def from_tuple(cls, bbox: Tuple[float, float, float, float], opts: Optional[Dict[str, Union[bool, float]]] = None) -> 'BoundingBoxFilter':
+        ...
+
+    @classmethod
+    def from_tuple(cls, bbox: Tuple[float, float, float, float], opts: Optional[Union[BoundingBoxFilterOptions, Dict[str, Union[bool, float]]]] = None) -> 'BoundingBoxFilter':
+        """
+        Create a BoundingBoxFilter from a tuple.
+
+        Args:
+            bbox (Tuple[float, float, float, float]): The bounding box.
+            opts (Optional[Union[BoundingBoxFilterOptions, Dict[str, Union[bool, float]]]]): The options for configuring the filter.
+
+        Returns:
+            BoundingBoxFilter: The created BoundingBoxFilter.
+        """
+        if opts is None:
+            opts = BoundingBoxFilterOptions()
+        elif isinstance(opts, dict):
+            opts = BoundingBoxFilterOptions(**opts)
+        vars = BoundingBoxFilterVars(
+            left=bbox[0],
+            bottom=bbox[1],
+            right=bbox[2],
+            top=bbox[3]
+        )
+        return cls(vars, opts)
+     
 
     def admits(self, bbox: Tuple[float, float, float, float]) -> bool:
         """
@@ -433,13 +482,13 @@ class BoundingBoxFilter:
         Returns:
             bool: True if the bounding box is admitted, False otherwise.
         """
-        if self.opts.check_left and not admits_float(self.vars.left, bbox[0], self.opts.tolerance):
+        if self.opts.check_left and not (admits_float(self.vars.left, bbox[0], self.opts.tolerance) if self.opts.require_equality else contained_in_bbox(bbox, (self.vars.left, self.vars.bottom, self.vars.right, self.vars.top), 1-self.opts.tolerance)):
             return False
-        if self.opts.check_top and not admits_float(self.vars.top, bbox[1], self.opts.tolerance):
+        if self.opts.check_bottom and not (admits_float(self.vars.bottom, bbox[1], self.opts.tolerance) if self.opts.require_equality else contained_in_bbox(bbox, (self.vars.left, self.vars.bottom, self.vars.right, self.vars.top), 1-self.opts.tolerance)):
             return False
-        if self.opts.check_right and not admits_float(self.vars.right, bbox[2], self.opts.tolerance):
+        if self.opts.check_right and not (admits_float(self.vars.right, bbox[2], self.opts.tolerance) if self.opts.require_equality else contained_in_bbox(bbox, (self.vars.left, self.vars.bottom, self.vars.right, self.vars.top), 1-self.opts.tolerance)):
             return False
-        if self.opts.check_bottom and not admits_float(self.vars.bottom, bbox[3], self.opts.tolerance):
+        if self.opts.check_top and not (admits_float(self.vars.top, bbox[3], self.opts.tolerance) if self.opts.require_equality else contained_in_bbox(bbox, (self.vars.left, self.vars.bottom, self.vars.right, self.vars.top), 1-self.opts.tolerance)):
             return False
         return True
 
@@ -452,12 +501,15 @@ class TextFilterOptions:
     """Options for configuring the TextFilter."""
     check_font: bool = True
     check_bbox: bool = True
+    check_header: bool = False
+    tolerance: float = DEF_TOLERANCE["text"]
 
 @dataclass
 class TextFilterVars:
     """Variables for the TextFilter."""
     font: FontFilter
-    bbox: BoundingBoxFilter
+    bbox: Optional[BoundingBoxFilter] = None
+    header: Optional[ToCEntry] = None
 
 class TextFilter:
     def __init__(self, vars: TextFilterVars, opts: TextFilterOptions):
@@ -471,8 +523,29 @@ class TextFilter:
         self.vars = vars
         self.opts = opts
 
+    @overload
     @classmethod
-    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, text_opts: Optional[TextFilterOptions] = None, font_opts: Optional[FontFilterOptions] = None, bbox_opts: Optional[BoundingBoxFilterOptions] = None) -> 'TextFilter':
+    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, opts: Optional[TextFilterOptions] = None, font_opts: Optional[FontFilterOptions] = None, bbox_opts: Optional[BoundingBoxFilterOptions] = None, header: Optional[ToCEntry] = None) -> 'TextFilter':
+        ...
+
+    @overload
+    @classmethod
+    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, opts: Optional[Dict[str, Union[TextFilterOptions, FontFilterOptions, BoundingBoxFilterOptions]]] = None, header: Optional[ToCEntry] = None) -> 'TextFilter':
+        ...
+    
+    @overload
+    @classmethod
+    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, opts: Optional[Dict[str, Union[bool, float, FontFilterOptions, BoundingBoxFilterOptions]]] = None, header: Optional[ToCEntry] = None) -> 'TextFilter':
+        ...
+
+    @override
+    @classmethod
+    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, opts: Optional[Union[TextFilterOptions, 
+                                                                                     Dict[str, Union[FontFilterOptions, TextFilterOptions, BoundingBoxFilterOptions]], 
+                                                                                     Dict[str, Union[bool, float, FontFilterOptions, BoundingBoxFilterOptions]]]] = None, 
+                                                                                     font_opts: Optional[FontFilterOptions] = None,
+                                                                                     bbox_opts: Optional[BoundingBoxFilterOptions] = None,
+                                                                                     header: Optional[ToCEntry] = None) -> 'TextFilter':
         """
         Create a TextFilter from a ParagraphInfo object.
 
@@ -483,47 +556,55 @@ class TextFilter:
         Returns:
             TextFilter: The created TextFilter.
         """
-        opts = TextFilterOptions() if text_opts is None else text_opts
+        if opts is None:
+            opts = TextFilterOptions()
 
+        elif isinstance(opts, Dict[str, Union[FontFilterOptions, TextFilterOptions, BoundingBoxFilterOptions]]):
+            font_opts = opts.get('font', None)
+            bbox_opts = opts.get('bbox', None)
+            opts = TextFilterOptions(**opts.get('text', {}))
+
+        elif isinstance(opts, Dict[str, Union[bool, float, FontFilterOptions, BoundingBoxFilterOptions]]):
+            font_opts = opts.get('font', None)
+            bbox_opts = opts.get('bbox', None)
+            opts = TextFilterOptions(
+                check_font=opts.get('check_font', True),
+                check_bbox=opts.get('check_bbox', True),
+                check_header=opts.get('check_header', False),
+                tolerance=opts.get('tolerance', DEF_TOLERANCE["text"])
+            )
+        
         font_filter = FontFilter.from_paragraph_info(paragraph_info, font_opts)
         bbox_filter = BoundingBoxFilter.from_paragraph_info(paragraph_info, bbox_opts)
 
         vars = TextFilterVars(
             font=font_filter,
-            bbox=bbox_filter
+            bbox=bbox_filter,
+            header=header
         )
 
         return cls(vars, opts)
-
-
-    @override
-    @classmethod
-    def from_paragraph_info(cls, paragraph_info: ParagraphInfo, 
-                            fltr_dict: Dict[str, Union[bool, FontFilterOptions, BoundingBoxFilterOptions]]) -> 'TextFilter':
+    
+    def _admits_header(self, paragraph: ParagraphInfo, tolerance: float = DEF_TOLERANCE['text']) -> bool:
         """
-        Create a TextFilter from a ParagraphInfo object.
+        Check if the filter admits the given ParagraphInfo object as belonging to a specific header.
 
         Args:
-            paragraph_info (ParagraphInfo): The ParagraphInfo object.
-            fltr_dict (Dict): The dictionary containing filter configuration.
+            paragraph (ParagraphInfo): The ParagraphInfo object.
 
         Returns:
-            TextFilter: The created TextFilter.
+            bool: True if the ParagraphInfo object is admitted, False otherwise.
         """
-        opts = TextFilterOptions(
-            check_font=fltr_dict.get('check_font', True),
-            check_bbox=fltr_dict.get('check_bbox', True)
-        )
 
-        font_filter = FontFilter.from_paragraph_info(paragraph_info, fltr_dict.get('font', {}))
-        bbox_filter = BoundingBoxFilter.from_paragraph_info(paragraph_info, fltr_dict.get('bbox', {}))
-
-        vars = TextFilterVars(
-            font=font_filter,
-            bbox=bbox_filter
-        )
-
-        return cls(vars, opts)
+        if self.vars.header is None:
+            return False
+        if not paragraph.pagenum in range(self.vars.header.page_range[0], self.vars.header.page_range[1] + 1):
+            return False
+        if paragraph.pagenum == self.vars.header.page_range[0] and paragraph.bbox[3] - self.vars.header.start_vpos > tolerance:
+            return False
+        if paragraph.pagenum == self.vars.header.page_range[1] and self.vars.header.end_vpos - paragraph.bbox[1] > tolerance:
+            return False
+        return True
     
     def admits(self, paragraph: ParagraphInfo) -> bool:
         """
@@ -535,11 +616,16 @@ class TextFilter:
         Returns:
             bool: True if the LineInfo object is admitted, False otherwise.
         """
-        if self.opts.check_font and not self.vars.font.admits():
+        if self.opts.check_font and not self.vars.font.admits(paragraph):
             return False
-        if self.opts.check_bbox and not self.vars.bbox.admits(line.bbox):
+        if self.opts.check_bbox and not self.vars.bbox.admits(paragraph.bbox):
+            return False
+        if self.opts.check_header and not self._admits_header(paragraph, self.opts.tolerance):
             return False
         return True
+    
+    def __repr__(self):
+        return (f"TextFilter(vars={self.vars}, opts={self.opts})")
     
 
 @dataclass

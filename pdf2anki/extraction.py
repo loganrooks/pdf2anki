@@ -5,7 +5,7 @@ import time
 from typing import Dict, List, Optional, Set, Tuple
 from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTPage, LAParams, LTChar, LTTextBoxHorizontal, LTTextLineHorizontal, LTFigure
-from pdf2anki.utils import log_time, get_averages, get_average, concat_bboxes, contained_in_bbox
+from pdf2anki.utils import log_time, get_averages, get_average, concat_bboxes, contained_in_bbox, get_y_overlap
 from dataclasses import dataclass, field
 from typing import List, Tuple, Set
 
@@ -45,6 +45,7 @@ class ParagraphInfo:
     colors: Set[str] = field(default_factory=set)
     split_end_line: bool = False
     is_indented: bool = False
+    pagenum: Optional[int] = None
 
 @dataclass
 class PageInfo:
@@ -158,21 +159,6 @@ def extract_words_from_text(text_elements: List[CharInfo], separator: Optional[s
 
     return words
 
-def get_y_overlap(bbox1: Tuple[float], bbox2: Tuple[float]) -> float:
-    """
-    Calculate the vertical overlap between two bounding boxes.
-
-    Args:
-        bbox1 (tuple): Bounding box 1.
-        bbox2 (tuple): Bounding box 2.
-
-    Returns:
-        float: The vertical overlap between the two bounding boxes.
-    """
-    y1, y2 = bbox1[1], bbox1[3]
-    y3, y4 = bbox2[1], bbox2[3]
-    return min(y2, y4) - max(y1, y3)
-
 @log_time
 def extract_lines_from_text_elements(text_elements: List[CharInfo], char_margin_factor: float = 0.5, line_overlap_factor: float = 0.5, interrupt_chars: str = "-") -> List[LineInfo]:
     lines = []
@@ -270,7 +256,7 @@ def is_header_continuation(line_a: LineInfo, line_b: LineInfo, tolerance_factors
     similar_font_size = abs(line_b.font_size - header_font_size) <= header_font_size*tolerance_factors[1]
     return line_b_centered and similar_font_size
 
-def extract_paragraph_info(paragraph: List[LineInfo], indent_factor: float = 3.0) -> ParagraphInfo:
+def extract_paragraph_info(paragraph: List[LineInfo], pagenum: Optional[int] = None, indent_factor: float = 3.0) -> ParagraphInfo:
     """
     Extract information from a list of LineInfo elements that form a paragraph.
 
@@ -282,6 +268,7 @@ def extract_paragraph_info(paragraph: List[LineInfo], indent_factor: float = 3.0
     """
     paragraph_text = "".join(line.text for line in paragraph)
     return ParagraphInfo(
+        pagenum=pagenum,
         text=paragraph_text,
         lines=paragraph,
         bbox=concat_bboxes([line.bbox for line in paragraph]),
@@ -321,6 +308,7 @@ def extract_page_info(page: List[ParagraphInfo], pagenum: int) -> PageInfo:
 
 @log_time
 def extract_paragraphs_from_page(page: LTPage, 
+                                 pagenum: Optional[int] = None,
                                  char_margin_factor: float = 0.5, 
                                  line_margin_factor: float = 0.5, 
                                  clip: Optional[Tuple[float]] = None, 
@@ -341,7 +329,7 @@ def extract_paragraphs_from_page(page: LTPage,
                 max_line_gap = line.char_height * line_margin_factor
                 
                 if line_gap > max_line_gap or (is_indented(last_line, line, indent_factor=indent_factor) and not is_header_continuation(last_line, line)):
-                    current_paragraph_info = extract_paragraph_info(current_paragraph, indent_factor=indent_factor)
+                    current_paragraph_info = extract_paragraph_info(current_paragraph, pagenum=pagenum, indent_factor=indent_factor)
                     paragraphs.append(current_paragraph_info)
                     current_paragraph = [line]
                     last_line = line
@@ -361,7 +349,7 @@ def process_ltpages(doc: List[LTPage], char_margin_factor: float = 0.5, line_mar
     pages = []
     for page_num, page in enumerate(doc, start=1):
         clip = (margins[0], margins[1], page.width - margins[2], page.height - margins[3]) if margins else None
-        paragraphs = extract_paragraphs_from_page(page, char_margin_factor=char_margin_factor, line_margin_factor=line_margin_factor, clip=clip, bbox_overlap=bbox_overlap)
+        paragraphs = extract_paragraphs_from_page(page, pagenum=page_num, char_margin_factor=char_margin_factor, line_margin_factor=line_margin_factor, clip=clip, bbox_overlap=bbox_overlap)
         page_info = extract_page_info(paragraphs, pagenum=page_num)
         pages.append(page_info)
     return pages
