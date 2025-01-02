@@ -1,65 +1,13 @@
-from dataclasses import dataclass
 import logging
 import os
-import time
-from typing import Dict, List, Optional, Set, Tuple
+from typing import List, Optional, Tuple
 from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTPage, LAParams, LTChar, LTTextBoxHorizontal, LTTextLineHorizontal, LTFigure
-from pdf2anki.utils import log_time, get_averages, get_average, concat_bboxes, contained_in_bbox, get_y_overlap
-from dataclasses import dataclass, field
-from typing import List, Tuple, Set
+from pdf2anki.utils import get_averages, get_average, concat_bboxes, contained_in_bbox, get_y_overlap, clean_text
+from pdf2anki.decorators import log_time
+from pdf2anki.elements import CharInfo, LineInfo, ParagraphInfo, PageInfo
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-
-@dataclass
-class CharInfo:
-    text: str = ""
-    bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
-    size: float = 0.0
-    height: float = 0.0
-    width: float = 0.0
-    font: str = ""
-    color: str = ""
-
-@dataclass
-class LineInfo:
-    text: str = ""
-    chars: List[CharInfo] = field(default_factory=list)
-    bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
-    font_size: float = 0.0
-    char_height: float = 0.0
-    char_width: float = 0.0
-    fonts: Set[str] = field(default_factory=set)
-    colors: Set[str] = field(default_factory=set)
-    split_end_word: bool = False
-
-@dataclass
-class ParagraphInfo:
-    text: str = ""
-    lines: List[LineInfo] = field(default_factory=list)
-    bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
-    font_size: float = 0.0
-    char_width: float = 0.0
-    fonts: Set[str] = field(default_factory=set)
-    colors: Set[str] = field(default_factory=set)
-    split_end_line: bool = False
-    is_indented: bool = False
-    pagenum: Optional[int] = None
-
-@dataclass
-class PageInfo:
-    text: str = ""
-    bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
-    fonts: Set[str] = field(default_factory=set)
-    font_sizes: Set[float] = field(default_factory=set)
-    char_widths: Set[float] = field(default_factory=set)
-    colors: Set[str] = field(default_factory=set)
-    paragraphs: List[ParagraphInfo] = field(default_factory=list)
-    split_end_paragraph: bool = False
-    pagenum: int = 0
-    
-    
 
 def extract_char_info(ltchar: LTChar) -> CharInfo:
     """
@@ -280,7 +228,7 @@ def extract_paragraph_info(paragraph: List[LineInfo], pagenum: Optional[int] = N
         is_indented=is_indented(paragraph[1], paragraph[0], indent_factor=indent_factor) if len(paragraph) > 1 else False
     )
 
-def extract_page_info(page: List[ParagraphInfo], pagenum: int) -> PageInfo:
+def extract_page_info(page: List[ParagraphInfo]) -> PageInfo:
     """
     Extract information from a list of ParagraphInfo elements that form a page.
 
@@ -300,8 +248,7 @@ def extract_page_info(page: List[ParagraphInfo], pagenum: int) -> PageInfo:
         colors=set([color for paragraph in page for color in paragraph.colors]),
         paragraphs=page,
         split_end_paragraph=page[-1].split_end_line,
-        starts_with_indent=page[0].is_indented,
-        pagenum=pagenum
+        starts_with_indent=page[0].is_indented
     )
 
 
@@ -350,7 +297,8 @@ def process_ltpages(doc: List[LTPage], char_margin_factor: float = 0.5, line_mar
     for page_num, page in enumerate(doc, start=1):
         clip = (margins[0], margins[1], page.width - margins[2], page.height - margins[3]) if margins else None
         paragraphs = extract_paragraphs_from_page(page, pagenum=page_num, char_margin_factor=char_margin_factor, line_margin_factor=line_margin_factor, clip=clip, bbox_overlap=bbox_overlap)
-        page_info = extract_page_info(paragraphs, pagenum=page_num)
+        page_info = extract_page_info(paragraphs)
+        page_info.update_pagenum(page_num, recursive=True)
         pages.append(page_info)
     return pages
 
