@@ -1,18 +1,23 @@
-import logging
-import time
-from typing import List, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
-# from pdf2anki.tests.test_utils import test_get_averages_exact_partition, test_get_averages_multiple_groups
+from pdf2anki.elements import PageInfo
 
-def log_time(func):
-    """Decorator to log the time a function takes to run."""
-    def wrapper(*args, **kwargs):
-        start_time = time.time()
-        result = func(*args, **kwargs)
-        end_time = time.time()
-        logging.info(f"Function {func.__name__} took {end_time - start_time:.4f} seconds")
-        return result
-    return wrapper
+def is_valid_dict(d: dict, admissible_types: Dict[type, Tuple[type, ...]]) -> bool:
+    """
+    Check if a dictionary has valid types for its values.
+
+    Args:
+        d (dict): The dictionary to check.
+        admissible_types (dict): A dictionary mapping keys to admissible types for their values.
+
+    Returns:
+        bool: True if all values have valid types, False otherwise.
+    """
+    for key, value in d.items():
+        if key in admissible_types.keys():
+            if not isinstance(value, admissible_types[key]):
+                return False
+    return True
 
 def get_average(numbers):
     """
@@ -220,6 +225,42 @@ def get_y_overlap(bbox1: Tuple[float], bbox2: Tuple[float]) -> float:
     y1, y2 = bbox1[1], bbox1[3]
     y3, y4 = bbox2[1], bbox2[3]
     return min(y2, y4) - max(y1, y3)
+
+def clean_text(text: str) -> str:
+    """
+    Clean up text by removing leading/trailing whitespaces and converting to lowercase.
+
+    Args:
+        text (str): The text to clean.
+
+    Returns:
+        str: The cleaned text.
+    """
+    return ' '.join(text.split()).replace('“', '"').replace('”', '"').replace("’", "'").lstrip()
+
+def get_text_index_from_vpos(start_vpos: float, 
+                             page: PageInfo) -> int:
+    """
+    Get the index of the first character below the given vertical position in the text string.
+    
+    Args:
+        start_vpos: Vertical position to start searching from.
+        page: PageInfo object representing the page.
+
+    Returns:
+        int: Index of the first character below the given vertical position.
+    """
+    start_index = 0
+    for paragraph in page.paragraphs:
+        if paragraph.bbox[1] < start_vpos:
+            for line in paragraph.lines:
+                if line.bbox[1] >= start_vpos:
+                    start_index += len(line.text)
+                else:
+                    break
+            break
+        start_index += len(paragraph.text + "\n\n")
+    return start_index
 
 def main():
     # test_get_averages_multiple_groups()
