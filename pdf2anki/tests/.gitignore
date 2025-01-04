@@ -1,3 +1,6 @@
+test_files/*
+
+
 output/*
 .vscode
 examples/*
@@ -157,11 +160,6 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
-
-# pytest files
-pytestdebug.log
-pytestdebug.out
-pytest.ini
 
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
