@@ -151,11 +151,10 @@ def restore_file_objects(
             current_obj[int(last_part)] = file_obj.type(open(file_obj.name, "rb"))
         elif last_part:
             setattr(current_obj, last_part, file_obj.type(open(file_obj.name, "rb")))
-
     return obj
 
 
-def save_pages(pages: List[LTPage], filepath: str) -> None:
+def save_and_remove_file_objects(pages: List[LTPage], filepath: str, with_file_objects: bool = False) -> None:
     assert all(isinstance(page, LTPage) for page in pages), "All elements in the list must be LTPage objects."
     serializable_pages = []
     all_file_objs: Dict[int, List[FileObject]] = {}
@@ -172,25 +171,30 @@ def save_pages(pages: List[LTPage], filepath: str) -> None:
         logging.getLogger().setLevel(logging.INFO)
 
     with open(filepath, "wb") as f:
-        pickle.dump((serializable_pages, all_file_objs), f)
+        if with_file_objects:
+            pickle.dump((serializable_pages, all_file_objs), f)
+        else:
+            pickle.dump((serializable_pages, None), f)
 
-def load_pages(filepath: str) -> List[LTPage]:
+def load_pages(filepath: str, with_file_objects: bool = False) -> List[LTPage]:
     with open(filepath, "rb") as f:
         pages, all_file_objs = pickle.load(f)
 
     assert isinstance(pages, Iterable), "The first element in the tuple must be an iterable."
-    assert isinstance(all_file_objs, dict), "The second element in the tuple must be a dictionary."
+    
+    assert isinstance(all_file_objs, (dict, None)), "The second element in the tuple must be a dictionary or None"
 
     if config.DEBUG:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    for page in pages:
-        assert isinstance(page, LTPage), "All elements in the list must be LTPage objects."
-        file_objs = all_file_objs[page.pageid]
-        restore_file_objects(file_objs, page)
+    if all_file_objs is not None and with_file_objects:
+        for page in pages:
+            assert isinstance(page, LTPage), "All elements in the list must be SerializableLTPage objects."
+            file_objs = all_file_objs[page.pageid]
+            restore_file_objects(file_objs, page)
 
-    if config.DEBUG:
-        logging.getLogger().setLevel(logging.INFO)
+    if all_file_objs is None and with_file_objects:
+        logging.warning("File objects are not present in the file. Returning only the LTPage objects without file objects.")
 
     return pages
 
@@ -531,7 +535,7 @@ def main():
         print(f"Document exists at {doc_path}. Loading...")
         try:
             start_time = time.time()    
-            doc = load_pages(doc_path)
+            doc = load_and_restore_pages(doc_path)
             end_time = time.time()
             print("Loaded in {:.4f} seconds.\n".format(end_time - start_time))
         except IOError as e:
@@ -564,7 +568,7 @@ def main():
         print(f"Saving document to {doc_path}...")
         try:
             start_time = time.time()
-            save_pages(doc, doc_path)
+            save_pages_file_objs(doc, doc_path)
             end_time = time.time()
             print(f"Succesfully saved document in {end_time - start_time:.4f} seconds.\n")
         except Exception as e:
