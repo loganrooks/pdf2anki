@@ -426,29 +426,57 @@ extract_dispatcher: Dict[ElementType, Callable[..., Union[List[LineInfo], List[P
     ElementType.PARAGRAPH: extract_paragraphs,
     ElementType.PAGE: extract_page
 }
+
 @log_time
-def extract_meta(doc: List[PageInfo], 
+def search_in_page(regex: re.Pattern, 
+                   page: PageInfo, 
+                   start_vpos: Optional[float], 
+                   ign_pattern: Optional[Pattern],
+                   clip: Optional[Tuple[float]], 
+                   tolerance: float = DEFAULT_TOLERANCE,
+                   element_type: ElementType = ElementType.LINE) -> Union[List[LineInfo], List[ParagraphInfo], PageInfo]:
+
+    """
+    Search for a regex pattern in a page and return the matching element.
+
+    Args:
+        regex (re.Pattern): The compiled regex pattern to search for.
+        page_num (int): The page number.
+        page (PageInfo): The page to search in.
+        element_type (ElementType): The type of element to search for.
+        start_vpos (Optional[float]): The vertical position to start searching from.
+        char_margin_factor (float): The character margin factor.
+        clip (Optional[Tuple[float]]): The clipping box.
+        ign_pattern (Optional[Pattern]): The pattern to ignore.
+
+    Returns:
+        Union[List[LineInfo], List[ParagraphInfo], List[LTFigure]]: A list of matching elements.
+    """
+    extract_function = extract_dispatcher[element_type]
+    return extract_function(regex, page, start_vpos, clip, ign_pattern)
+
+@log_time
+def extract_elements(doc: List[PageInfo], 
                  pattern: str, 
                  page_numbers: Optional[List[int]] = None,
                  ign_case: bool = False, 
                  ign_pattern: Optional[Pattern] = None,
-                 char_margin_factor: float = 0.5,
-                 clip: Optional[Tuple[float]] = None) -> List[dict]:
-    meta = []
+                 tolerance: float = DEFAULT_TOLERANCE,
+                 clip: Optional[Tuple[float]] = None,
+                 element_type: ElementType = ElementType.LINE) -> List[Union[LineInfo, ParagraphInfo, PageInfo]]:
+    all_elements = []
     regex = re.compile(pattern, re.IGNORECASE) if ign_case else re.compile(pattern)
 
     if page_numbers is None:
         pages = enumerate(doc, start=1)
     else:
-        for i, pagenum in enumerate(page_numbers):
-            pages = [(pagenum+1, doc[i])]
+        pages = [(pagenum, doc[pagenum - 1]) for pagenum in page_numbers]
 
     for pagenum, page in pages:
-        meta.extend(search_in_page(regex, pagenum, page, ign_pattern=ign_pattern, char_margin_factor=char_margin_factor, clip=clip))
-    
-    return meta
-
-
+        elements = [element for element in search_in_page(regex, pagenum, page, ign_pattern=ign_pattern, clip=clip, tolerance=tolerance, element_type=element_type) if isinstance(element, Union[LineInfo, ParagraphInfo, PageInfo])]
+        [element.update_pagenum(pagenum, recursive=True) for element in elements]
+        all_elements.extend(elements)
+    return all_elements
 def generate_recipe(doc: List[PageInfo], 
                     headers: List[Tuple[str, int, int]], 
                     page_numbers: List[int] = None,
