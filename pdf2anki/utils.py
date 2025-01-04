@@ -1,23 +1,131 @@
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Required, Set, Tuple, Union, Optional, get_args, get_origin
+import pdb
 
 from pdf2anki.elements import PageInfo
 
-def is_valid_dict(d: dict, admissible_types: Dict[type, Tuple[type, ...]]) -> bool:
-    """
-    Check if a dictionary has valid types for its values.
 
-    Args:
-        d (dict): The dictionary to check.
-        admissible_types (dict): A dictionary mapping keys to admissible types for their values.
 
-    Returns:
-        bool: True if all values have valid types, False otherwise.
+
+def is_valid_arg(value: Any, hint: Any) -> bool:
     """
-    for key, value in d.items():
-        if key in admissible_types.keys():
-            if not isinstance(value, admissible_types[key]):
-                return False
-    return True
+    Checks whether 'value' is a valid instance of 'hint', where 'hint'
+    can be a complex type annotation involving Optional, Union, dict,
+    list, set, tuple, and a special Required[...] for ensuring at least
+    one required type is present in a dictionary's values.
+
+    Example:
+    Optional[dict[str, Union[dict[str, Union[str, float, bool]],
+                               FontFilterOptions,
+                               BoundingBoxFilterOptions,
+                               Required[ToCFilterOptions]]]]
+    """
+
+    # [CHANGED] Handle Any explicitly. If hint is Any, everything is valid.
+    if hint is Any:
+        return True
+
+    origin = get_origin(hint)
+    args = get_args(hint)
+
+    # 1) Handle Optional[...] (Union[..., None])
+    if origin is Union and type(None) in args:
+        non_none_args = [a for a in args if a is not type(None)]
+        if value is None:
+            return True
+        return any(is_valid_arg(value, a) for a in non_none_args)
+
+    # 2) Handle general Union[...] (no Optional)
+    if origin is Union:
+        return any(is_valid_arg(value, a) for a in args)
+
+    # 3) Handle Required[...] wrapper
+    if origin is Required:
+        required_type = args[0] if args else Any
+        return is_valid_arg(value, required_type)
+
+    # 4a) Handle list[...] (e.g. list[int])
+    if origin is list:
+        if not isinstance(value, list):
+            return False
+        if len(args)==1 or (len(args) == 2 and args[1] is Ellipsis):
+            (item_type, ) = args
+            return all(is_valid_arg(item, item_type) for item in value)
+        # If it’s a fixed-length list (Tuple[T1, T2, ...]) match by position
+        if len(value) != len(args):
+            return False
+        return all(is_valid_arg(item, t) for item, t in zip(value, args))
+
+    # 4b) Handle set[...] (e.g. set[str])
+    if origin is set:
+        if not isinstance(value, set):
+            return False
+        if len(args)==1 or (len(args) == 2 and args[1] is Ellipsis):
+            (item_type, ) = args
+            return all(is_valid_arg(item, item_type) for item in value)
+        # If it’s a fixed-length tuple (Tuple[T1, T2, ...]) match by position
+        if len(value) != len(args):
+            return False
+        return all(is_valid_arg(item, t) for item, t in zip(value, args))
+
+    # 4c) Handle tuple[...] (can be Tuple[T, ...] or fixed-length)
+    if origin is tuple:
+        if not isinstance(value, tuple):
+            return False
+        # If it’s a variable-length tuple (one type param), check each item
+        # pdb.set_trace()
+        if len(args)==1 or (len(args) == 2 and args[1] is Ellipsis):
+            (item_type, _) = args
+            return all(is_valid_arg(item, item_type) for item in value)
+        # If it’s a fixed-length tuple (Tuple[T1, T2, ...]) match by position
+        if len(value) != len(args):
+            return False
+        return all(is_valid_arg(item, t) for item, t in zip(value, args))
+
+    # 4d) Handle dict[...] (likely includes TypedDict at runtime)
+    if origin is dict:
+        if not isinstance(value, dict):
+            return False
+        dict_key_type, dict_value_type = args  # Renamed for clarity
+
+        # Check that all keys match dict_key_type
+        if not all(isinstance(k, dict_key_type) for k in value.keys()):
+            return False
+
+        val_origin = get_origin(dict_value_type)
+        val_args = get_args(dict_value_type)
+
+        # Collect Required subtypes if present
+        required_subtypes = []
+        if val_origin is Union:
+            for subhint in val_args:
+                if get_origin(subhint) is Required:
+                    required_subtypes.append(get_args(subhint)[0])
+        elif val_origin is Required:
+            required_subtypes.append(val_args[0])
+
+        valid_so_far = True
+        found_required_types = {req: False for req in required_subtypes}
+
+        for v in value.values():
+            if not is_valid_arg(v, dict_value_type):
+                valid_so_far = False
+                break
+            # Mark any Required[...] type found
+            for req_type in found_required_types:
+                if isinstance(v, req_type):
+                    found_required_types[req_type] = True
+
+        if valid_so_far:
+            return all(found_required_types[req] for req in found_required_types)
+        else:
+            return False
+
+    # 5) Basic check for normal types (str, int, bool, classes, etc.)
+    if isinstance(hint, type):
+        return isinstance(value, hint)
+
+    # 6) Fallback for unhandled cases
+    return isinstance(value, hint)
 
 def get_average(numbers):
     """
