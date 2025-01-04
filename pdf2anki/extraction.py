@@ -612,7 +612,7 @@ def main():
     processed_pages = process_ltpages(doc, char_margin_factor=params.char_margin, line_margin_factor=params.line_margin, margins=margins, bbox_overlap=bbox_overlap, verbose=args.verbose)
     print(f"Processed {len(processed_pages)} pages.")
 
-    output_file_path = os.path.splitext(args.pdf_path)[0] + "processed_pages.pkl" if args.__dict__.get("out", None) is None else args.out
+    output_file_path = os.path.splitext(args.pdf_path)[0] + "_processed_pages.pkl" if args.__dict__.get("out", None) is None else args.out
     print(f"Saving processed pages to {output_file_path}...")
     with open(output_file_path, "wb") as output_file:
         pickle.dump(processed_pages, output_file)
