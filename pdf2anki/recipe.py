@@ -1,21 +1,25 @@
+from enum import Enum
+import hashlib
+import json
 import os
-from utils import log_time
-from typing import List, Optional, Tuple, Pattern, Union
-from itertools import chain
-from pdfminer.layout import LTPage, LTTextBoxHorizontal, LTTextLineHorizontal, LTFigure, LTChar, LAParams
+from pdf2anki.utils import clean_text, contained_in_bbox, get_text_index_from_vpos
+from pdf2anki.decorators import log_time
+from typing import Callable, List, Literal, Optional, Set, Tuple, Pattern, Union, overload
+from pdfminer.layout import LAParams
 from pdfminer.high_level import extract_pages
-from pdfminer.pdfparser import PDFDocument
-from extraction import extract_lines_from_figure
 import re
-from filters import ToCFilter
-from pdf2anki.extraction import PageInfo, ParagraphInfo, LineInfo, CharInfo
-from pdf2anki.filters import ToCFilterVars, ToCFilterOptions, ToCEntry
+from pdf2anki.elements import PageInfo, ParagraphInfo, LineInfo, ElementType
+from pdf2anki.filters import ToCFilterOptions, ToCEntry, ToCFilter, TextFilterOptions, TextFilter, FontFilterOptions, BoundingBoxFilterOptions
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Iterator, Tuple
-from itertools import chain
 from collections import defaultdict
+from pdf2anki.config import DEBUG
 
+DEFAULT_TOLERANCE = 1e-2
 
+class SearchMode(Enum):
+    HEADER = 'header'
+    TEXT = 'text'
 
 class FoundGreedy(Exception):
     """A hacky solution to do short-circuiting in Python.
@@ -114,73 +118,132 @@ def concatFrag(frags: Iterator[Optional[Fragment]], sep: str = " ") -> Dict[int,
 
 class Recipe:
     """The internal representation of a recipe using dataclasses."""
-    filters: List[ToCFilter]
+    toc_filters: Dict[str, ToCFilter]
+    text_filters: Dict[str, TextFilter]
+    toc_to_text_map: Dict[str, Set[str]]
 
-    def __init__(self, recipe_list: List[List[ToCFilterVars, ToCFilterOptions]]):
-        fltr_dicts = recipe_list.get('heading', [])
+    def __init__(self, filters_dict: Dict[str, Union[List[ToCFilter], List[List[TextFilter]]]]):
+        toc_filters = filters_dict.get('heading', [])
+        text_filters_list = filters_dict.get('text', [])
 
-        if not fltr_dicts:
-            raise ValueError("no filters found in recipe")
-        self.filters = [ToCFilter(fltr) for fltr in fltr_dicts]
+        # Generate unique IDs for ToCFilters and TextFilters
+        self.toc_filters = {self._generate_filter_id(toc_filter): toc_filter for toc_filter in toc_filters}
+        all_text_filters = [text_filter for sublist in text_filters_list for text_filter in sublist]
+        unique_text_filters = {self._generate_filter_id(text_filter): text_filter for text_filter in all_text_filters}
+        self.text_filters = unique_text_filters
+
+        # Create the mapping from ToCFilter IDs to TextFilter IDs
+        self.toc_to_text_map = {}
+        for toc_filter, text_filters in zip(toc_filters, text_filters_list):
+            toc_filter_id = self._generate_filter_id(toc_filter)
+            text_filter_ids = set([self._generate_filter_id(text_filter) for text_filter in text_filters])
+            self.toc_to_text_map[toc_filter_id] = text_filter_ids
+
+    @staticmethod
+    def generate_filter_id(filter_obj) -> str:
+        """Generate a SHA256 hash for a filter object based on its attributes."""
+        filter_json = json.dumps(filter_obj.__dict__, sort_keys=True)
+        return hashlib.sha256(filter_json.encode('utf-8')).hexdigest()
 
     @classmethod
-    def from_dict_list(cls, data: List[Dict]):
-        """
-        Initialize Recipe from a list of dictionaries.
-        """
-        recipe_dict = {"heading": data}
-        return cls(recipe_dict)
+    def from_dict(cls, recipe_dict: Dict[str, Union[List[Dict], List[List[Dict]]]]) -> 'Recipe':
+        toc_dicts = recipe_dict.get('heading', [])
+        text_dicts_list = recipe_dict.get('text', [])
+
+        toc_filters = [ToCFilter.from_dict(fltr) for fltr in toc_dicts]
+        text_filters_list = [[TextFilter.from_dict(fltr) for fltr in text_dicts] for text_dicts in text_dicts_list]
+
+        return cls({
+            'heading': toc_filters,
+            'text': text_filters_list
+        })
 
     @classmethod
-    def from_nested_list(cls, data: List[List[Union[ToCFilterVars, ToCFilterOptions]]]):
-        """
-        Initialize Recipe from a nested list structure.
-        """
-        recipe_dict = {"heading": []}
-        for sublist in data:
-            for item in sublist:
-                filter_dict = {
-                    "level": item.var,
-                    "font": item.options.font,
-                    "size": item.options.size,
-                    "color": item.options.color,
-                    "char_width": item.options.char_width,
-                    "is_upper": item.options.is_upper,
-                    "bbox": item.options.bbox,
-                    "greedy": item.options.greedy
-                }
-                recipe_dict["heading"].append(filter_dict)
-        return cls(recipe_dict)
+    def from_nested_dict(cls, nested_dict: Dict[str, Dict[str, Union[List[Dict], List[List[Dict]]]]]) -> 'Recipe':
+        toc_dicts = nested_dict.get('heading', {}).get('filters', [])
+        text_dicts_list = nested_dict.get('text', {}).get('filters', [])
+        
+        toc_filters = [ToCFilter.from_dict(fltr) for fltr in toc_dicts]
+        text_filters_list = [[TextFilter.from_dict(fltr) for fltr in text_dicts] for text_dicts in text_dicts_list]
 
-    def extract_meta(self, pages: List[PageInfo]):
-        """
-        Extract meta information from a list of PageInfo objects.
-        """
-        for page in pages:
-            meta = self.search_in_page(page)
-            # Process meta as needed
+        return cls({
+            'heading': toc_filters,
+            'text': text_filters_list
+        })
 
-    def generate_recipe(self, pages: List[PageInfo]):
-        """
-        Generate a recipe from a list of PageInfo objects.
-        """
-        self.extract_meta(pages)
-        # Additional logic to generate recipe
+    @classmethod
+    def from_lists(cls, toc_list: List[ToCFilter], text_lists: List[List[TextFilter]]) -> 'Recipe':
+        return cls({
+            'heading': toc_list,
+            'text': text_lists
+        })
 
-    def search_in_page(self, page: PageInfo) -> List[Fragment]:
-        """
-        Search a single PageInfo object for relevant data.
-        """
-        fragments = []
-        for paragraph in page.paragraphs:
-            for line in paragraph.lines:
-                fragments.extend(self._extract_line(line))
-        return fragments
+    def get_text_filters_for_toc(self, toc_filter: ToCFilter) -> Optional[List[TextFilter]]:
+        toc_filter_id = self.generate_filter_id(toc_filter)
+        text_filter_ids = self.toc_to_text_map.get(toc_filter_id, [])
+        return [self.text_filters[text_filter_id] for text_filter_id in text_filter_ids]
+    
+    def _generate_filter_id(filter_obj) -> str:
+        """Generate a SHA256 hash for a filter object based on its attributes."""
+        filter_json = json.dumps(filter_obj.__dict__, sort_keys=True)
+        return hashlib.sha256(filter_json.encode('utf-8')).hexdigest()
 
-    def extract_page(self, page: PageInfo) -> List[ToCEntry]:
+    def add_toc_filter(self, toc_filter: ToCFilter, text_filters: Optional[List[TextFilter]] = None):
         """
-        Iteratively call extract_paragraph for each paragraph in a PageInfo and return list of ToCEntries.
+        Add a ToCFilter to the Recipe and optionally associate it with TextFilters.
         """
+        toc_filter_id = self._generate_filter_id(toc_filter)
+        self.toc_filters[toc_filter_id] = toc_filter
+
+        if text_filters:
+            text_filter_ids = []
+            for text_filter in text_filters:
+                text_filter_id = self._generate_filter_id(text_filter)
+                self.text_filters[text_filter_id] = text_filter
+                text_filter_ids.append(text_filter_id)
+            self.toc_to_text_map[toc_filter_id] = text_filter_ids
+
+    def remove_toc_filter(self, toc_filter: ToCFilter):
+        """
+        Remove a ToCFilter from the Recipe.
+        """
+        toc_filter_id = self._generate_filter_id(toc_filter)
+        if toc_filter_id in self.toc_filters:
+            del self.toc_filters[toc_filter_id]
+            if toc_filter_id in self.toc_to_text_map:
+                del self.toc_to_text_map[toc_filter_id]
+
+    def add_text_filter(self, toc_filter: ToCFilter, text_filter: TextFilter):
+        """
+        Add a TextFilter to the Recipe and associate it with a ToCFilter.
+        """
+        toc_filter_id = self._generate_filter_id(toc_filter)
+        if toc_filter_id not in self.toc_filters:
+            raise ValueError(f"Referenced ToCFilter {toc_filter} not found in ToCFilters")
+
+        text_filter_id = self._generate_filter_id(text_filter)
+        self.text_filters[text_filter_id] = text_filter
+
+        if toc_filter_id in self.toc_to_text_map:
+            self.toc_to_text_map[toc_filter_id].add(text_filter_id)
+        else:
+            self.toc_to_text_map[toc_filter_id] = [text_filter_id]
+
+    def remove_text_filter(self, text_filter: TextFilter):
+        """
+        Remove a TextFilter from the Recipe.
+        """
+        text_filter_id = self._generate_filter_id(text_filter)
+        if text_filter_id in self.text_filters:
+            del self.text_filters[text_filter_id]
+
+            # Remove the text filter from all ToCFilter associations
+            for toc_filter_id, text_filter_ids in self.toc_to_text_map.items():
+                if text_filter_id in text_filter_ids:
+                    text_filter_ids.remove(text_filter_id)
+                    if not text_filter_ids:
+                        del self.toc_to_text_map[toc_filter_id]
+
         toc_entries = []
         for paragraph in page.paragraphs:
             entry = self.extract_paragraph(paragraph, page.page_number)
