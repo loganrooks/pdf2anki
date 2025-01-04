@@ -1,11 +1,21 @@
+import inspect
+import io
 import logging
 import os
-from typing import List, Optional, Tuple
+import pdb
+import pickle
+import re
+import time
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type, Union, get_args
 from pdfminer.high_level import extract_pages
-from pdfminer.layout import LTPage, LAParams, LTChar, LTTextBoxHorizontal, LTTextLineHorizontal, LTFigure
-from pdf2anki.utils import get_averages, get_average, concat_bboxes, contained_in_bbox, get_y_overlap, clean_text
-from pdf2anki.decorators import log_time
-from pdf2anki.elements import CharInfo, LineInfo, ParagraphInfo, PageInfo
+from pdfminer.pdftypes import PDFStream
+from pdfminer.layout import LTPage, LAParams, LTChar, LTTextBoxHorizontal, LTTextLineHorizontal, LTFigure, LTComponent, LTImage
+from pdf2anki import config
+from pdf2anki.utils import get_averages, get_average, concat_bboxes, contained_in_bbox, get_y_overlap
+from pdf2anki.decorators import conditional_decorator, count_calls, log_time, progress_monitor
+from pdf2anki.elements import CharInfo, FileObject, LineInfo, ParagraphInfo, PageInfo, SerializableLTPage, Primitive, FileType
+import argparse  # Import the global config.DEBUG flag
+
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -257,7 +267,7 @@ def extract_words_from_text(text_elements: List[CharInfo], separator: Optional[s
     last_char_separator = False
 
     for char in text_elements:
-        if char.text == separator:
+        if (char.text == separator):
             last_char_separator = True
             current_word.append(char)
         elif last_char_separator:
@@ -366,7 +376,7 @@ def is_header_continuation(line_a: LineInfo, line_b: LineInfo, tolerance_factors
         bool: True if line_b is a continuation of a header from line_a, False otherwise.
     """
     header_font_size = line_a.font_size
-    line_b_centered = is_centered(line_b, line_a.bbox[2] - line_a.bbox[0], tolerance_factor=tolerance_factors[0])
+    line_b_centered = is_centered(line_b, line_a.bbox, tolerance_factor=tolerance_factors[0])
     similar_font_size = abs(line_b.font_size - header_font_size) <= header_font_size*tolerance_factors[1]
     return line_b_centered and similar_font_size
 
@@ -386,15 +396,15 @@ def extract_paragraph_info(paragraph: List[LineInfo], pagenum: Optional[int] = N
         text=paragraph_text,
         lines=paragraph,
         bbox=concat_bboxes([line.bbox for line in paragraph]),
-        fonts=set([line.fonts for line in paragraph]),
-        colors=set([line.colors for line in paragraph]),
+        fonts=set(font for line in paragraph for font in line.fonts),
+        colors=set(color for line in paragraph for color in line.colors),
         char_width=get_average([line.char_width for line in paragraph]),
         font_size=get_average([line.font_size for line in paragraph]),
         split_end_line=paragraph[-1].split_end_word,
         is_indented=is_indented(paragraph[1], paragraph[0], indent_factor=indent_factor) if len(paragraph) > 1 else False
     )
 
-def extract_page_info(page: List[ParagraphInfo]) -> PageInfo:
+def extract_page_info(page: List[ParagraphInfo], tolerance: float = 1e-1) -> PageInfo:
     """
     Extract information from a list of ParagraphInfo elements that form a page.
 
@@ -408,10 +418,10 @@ def extract_page_info(page: List[ParagraphInfo]) -> PageInfo:
     return PageInfo(
         text=page_text,
         bbox=concat_bboxes([paragraph.bbox for paragraph in page]),
-        fonts=set([font for paragraph in page for font in paragraph.fonts]),
-        font_sizes=get_averages([size for paragraph in page for size in paragraph.font_size]),
-        char_widths=get_averages([width for paragraph in page for width in paragraph.char_width]),
-        colors=set([color for paragraph in page for color in paragraph.colors]),
+        fonts=set(font for paragraph in page for font in paragraph.fonts),
+        font_sizes=get_averages([paragraph.font_size for paragraph in page], tolerance=tolerance),
+        char_widths=get_averages([paragraph.char_width for paragraph in page], tolerance=tolerance),
+        colors=set(color for paragraph in page for color in paragraph.colors),
         paragraphs=page,
         split_end_paragraph=page[-1].split_end_line,
         starts_with_indent=page[0].is_indented
@@ -422,13 +432,15 @@ def extract_page_info(page: List[ParagraphInfo]) -> PageInfo:
 @log_time
 def extract_paragraphs_from_page(page: LTPage, 
                                  pagenum: Optional[int] = None,
-                                 char_margin_factor: float = 0.5, 
+                                 char_margin_factor: float = 4.0, 
                                  line_margin_factor: float = 0.5, 
                                  clip: Optional[Tuple[float]] = None, 
                                  bbox_overlap: float = 1.0,
                                  indent_factor: float = 3.0) -> List[PageInfo]:
     paragraphs = []
     lines = extract_lines_from_figure(page, char_margin_factor=char_margin_factor)
+    if not lines:
+        return None
     current_paragraph = []
     last_line = None
 
@@ -458,11 +470,16 @@ def extract_paragraphs_from_page(page: LTPage,
     return paragraphs
 
 @log_time
-def process_ltpages(doc: List[LTPage], char_margin_factor: float = 0.5, line_margin_factor: float = 0.5, margins: Optional[Tuple[float]] = None, bbox_overlap: float = 1.0) -> List[PageInfo]:
+@progress_monitor
+def process_ltpages(doc: List[LTPage], char_margin_factor: float = 4.0, line_margin_factor: float = 0.5, margins: Optional[Tuple[float]] = None, bbox_overlap: float = 1.0, verbose: bool = False) -> List[PageInfo]:
     pages = []
     for page_num, page in enumerate(doc, start=1):
         clip = (margins[0], margins[1], page.width - margins[2], page.height - margins[3]) if margins else None
+
         paragraphs = extract_paragraphs_from_page(page, pagenum=page_num, char_margin_factor=char_margin_factor, line_margin_factor=line_margin_factor, clip=clip, bbox_overlap=bbox_overlap)
+        if paragraphs is None:
+            pages.append(PageInfo(text="", bbox=page.bbox, paragraphs=[], font_sizes=[], char_widths=[], colors=set(), starts_with_indent=False, split_end_paragraph=False))
+            continue
         page_info = extract_page_info(paragraphs)
         page_info.update_pagenum(page_num, recursive=True)
         pages.append(page_info)
