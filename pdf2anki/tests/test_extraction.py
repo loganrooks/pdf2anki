@@ -229,6 +229,7 @@ def test_extract_page_info_two_fonts():
     assert page_info.font_sizes == [12.0, 14.0], "Page font sizes do not match"
     assert page_info.char_widths == [10.0, 12.0], "Page char widths do not match"
     assert page_info.colors == {'black', 'red'}, "Page colors do not match"
+
 def test_process_ltpages_no_type_error():
     # Create mock PDFGraphicState
     class MockPDFGraphicState:
@@ -371,3 +372,239 @@ def test_process_ltpages_no_type_error():
     assert processed_page.paragraphs == [paragraph_info], "Page paragraphs do not match."
     assert not processed_page.split_end_paragraph, "Page split_end_paragraph should be False."
     assert not processed_page.starts_with_indent, "Page starts_with_indent should be False."
+
+class MockLTContainer(LTContainer):
+    def __init__(self, bbox):
+        LTContainer.__init__(self, bbox)
+    
+    def __iter__(self):
+        return iter(self._objs)
+    
+    def add_lt_image(self, bbox, file_name):
+        j = len([obj for obj in self._objs if isinstance(obj, LTImage)])
+        img = MockLTImage(bbox, file_name, i=j)
+        self._objs.append(img)
+        return self
+    
+    def add_lt_figure(self, bbox, matrix):
+        j = len([obj for obj in self._objs if isinstance(obj, LTFigure)])
+        fig = MockLTFigure(bbox, matrix, i=j)
+        self._objs.append(fig)
+        return self
+
+    def add_lt_char(self, font, fontsize, text, textwidth, bbox, matrix=(1, 0, 0, 1, 0, 0), scaling=1.0, rise=0.0, textdisp=0.0, ncs=None, graphicstate=None):
+        char = LTChar(matrix=matrix, font=font, fontsize=fontsize, scaling=scaling, rise=0.0, text=text, textwidth=textwidth, textdisp=0.0, ncs=None, graphicstate=None)
+        char.set_bbox(bbox)
+        self.add(char)
+        return self
+
+    def add_lt_textline(self, objs: List[LTChar]):
+        line = LTTextLineHorizontal(word_margin=0.5)
+        for obj in objs:
+            line.add(obj)
+        self._objs.append(line)
+        return self
+
+class StreamType(Enum):
+    IMAGE = 0
+    TEXT = 1
+
+
+class MockPDFParser(PDFParser):
+    def __init__(self, file_name: str):
+        fp = open(file_name, 'rb')
+        super().__init__(fp)
+
+class MockPDFDocument(PDFDocument):
+    def __init__(self, file_name: str):
+        parser = MockPDFParser(file_name)
+        super().__init__(parser)
+
+class MockPDFObjRef(PDFObjRef):
+    def __init__(self, file_name, i=0):
+        doc = MockPDFDocument(file_name)
+        super().__init__(doc, i, None)
+
+    
+class MockPDFStream(PDFStream):
+    def __init__(self, file_name, type: StreamType = StreamType.IMAGE, i=0):
+        pdf_file_name = os.path.splitext(file_name)[0] + ".pdf"
+        if type == StreamType.IMAGE:
+            with Image.open(file_name, 'r') as img:
+                width, height = img.size
+                bits_per_component = 8 if img.mode in ["RGB", "L"] else 1  # Adjust based on mode
+                color_space = "DeviceRGB" if img.mode == "RGB" else "DeviceGray"
+                length = len(img.tobytes())
+                rawdata = img.tobytes()
+
+
+                decode_params = {
+                    "BitsPerComponent": bits_per_component,
+                    "Colors": 1 if color_space == "DeviceGray" else 3,
+                    "Columns": width,
+                    "Predictor": 15  # Example value; adjust based on specific encoding
+                }
+                attrs = {
+                        "Type": LIT("XObject"),
+                        "Subtype": LIT("Image"),
+                        "Width": width,
+                        "Height": height,
+                        "ColorSpace": [LIT("ICCBased"), MockPDFObjRef(pdf_file_name, i)],
+                        "BitsPerComponent": bits_per_component,
+                        "DecodeParms": decode_params,
+                        "Filter": LIT("FlateDecode"),  # Example value; adjust based on specific encoding
+                        "Length": length
+                    }
+        super().__init__(attrs, rawdata)
+
+class MockLTImage(LTImage):
+    def __init__(self, bbox, file_name, i=0):
+        stream = MockPDFStream(file_name, type=StreamType.IMAGE)
+        stream.decode()
+        super().__init__(f"mock_img_{i}", stream, bbox)
+
+class MockLTFigure(LTFigure, MockLTContainer):
+    def __init__(self, bbox, matrix, i=0):
+        name = f"mock_fig_{i}"
+        LTFigure.__init__(self, name, bbox, matrix)
+        MockLTContainer.__init__(self, bbox)
+
+class MockLTPage(LTPage, MockLTContainer):
+
+    def __init__(self, pageid, bbox):
+        MockLTContainer.__init__(self, bbox)
+        LTPage.__init__(self, pageid, bbox)
+        
+PAGE_WIDTH = letter[0]
+PAGE_HEIGHT = letter[1]
+
+def create_pdf(file_name: str, size: tuple, color: str) -> str:
+    """
+    Create a PDF with the specified size and color, and save it to the given file name.
+    """
+    c = canvas.Canvas(file_name, pagesize=(PAGE_WIDTH, PAGE_HEIGHT))
+    c.setFillColor(color)
+    c.rect(0, 0, size[0], size[1], fill=1)
+    c.save()
+    return file_name
+
+def create_image(file_name: str, size: tuple, color: str) -> str:
+    """
+    Create an image with the specified size and color, and save it to the given file name.
+    """
+    img = Image.new("RGB", size, color)
+    img.save(file_name)
+    return file_name
+
+test_files_dir = os.path.join(os.path.dirname(__file__), 'test_files')
+os.makedirs(test_files_dir, exist_ok=True)
+
+@pytest.mark.parametrize("size, color, expected_removed_count", [
+    ((10, 10), "red", 1),
+    ((20, 20), "blue",  1)
+])
+def test_remove_file_objects_with_different_pdfs(size: tuple, color: str, expected_removed_count: int):
+    """
+    Test remove_file_objects with parametrized fake PDFs.
+    """
+    fake_file_name = os.path.join(test_files_dir, f"fake_file_{size[0]}x{size[1]}_{color}.pdf")
+    fake_img_name = os.path.splitext(fake_file_name)[0] + ".png"
+    # Create a PDF with the specified size and color
+    if not os.path.exists(fake_file_name):
+        create_pdf(fake_file_name, size, color)
+    
+    if not os.path.exists(fake_img_name):
+        create_image(fake_img_name, size, color)
+
+    lt_page = MockLTPage(pageid=3, bbox=(0, 0, PAGE_WIDTH, PAGE_HEIGHT))
+    # Inject the file object into lt_page._objs
+    lt_page.add_lt_figure((0, 0, 100, 100), (1, 0, 0, 1, 0, 0))
+
+    kwargs = {"bbox": (0, 0, size[0], size[1]), "file_name": fake_img_name}    
+    assert len(lt_page._objs) == 1 and isinstance(lt_page._objs[0], MockLTFigure), "LTPage should contain a single LTFigure object."
+
+    for _ in range(expected_removed_count):
+        lt_page._objs[0].add_lt_image(**kwargs)
+    
+    # pdb.set_trace()
+
+    removed = remove_file_objects(lt_page)
+    assert len(removed) == expected_removed_count, f"Expected {expected_removed_count} removed file objects, got {len(removed)}."
+    assert isinstance(removed[0], FileObject), "Removed object should be a FileObject."
+
+@pytest.mark.parametrize("num_files, size, color", [
+    (1, (10, 10), "red"),
+    (3, (20, 20), "blue"),
+    (5, (30, 30), "green")
+])
+def test_remove_file_objects_multiple_files(num_files, size, color):
+    """
+    Test remove_file_objects with multiple fake file objects.
+    """
+    lt_page = MockLTPage(pageid=3, bbox=(0, 0, PAGE_WIDTH, PAGE_HEIGHT))
+    lt_page.add_lt_figure((0, 0, 50, 50), (1, 0, 0, 1, 0, 0))
+
+    assert len(lt_page._objs) == 1 and isinstance(lt_page._objs[0], MockLTFigure), "LTPage should contain a single LTFigure object."
+
+    for i in range(num_files):
+        fake_file_name = os.path.join(test_files_dir, f"fake_pdf_{size[0]}x{size[1]}_{color}_{i}.pdf")
+        fake_img_name = os.path.splitext(fake_file_name)[0] + ".png"
+        if not os.path.exists(fake_file_name):
+            create_pdf(fake_file_name, size, color)
+        if not os.path.exists(fake_img_name):
+            create_image(fake_img_name, size, color)
+        lt_page._objs[0].add_lt_image(bbox=(0, 0, size[0], size[1]), file_name=fake_img_name)
+
+    removed = remove_file_objects(lt_page)
+    assert len(removed) == num_files, f"Expected {num_files} removed file objects, got {len(removed)}."
+
+@pytest.mark.parametrize("size, color, expected_removed_count", [
+    ((10, 10), "red", 2),
+    ((20, 20), "blue",  2)
+])
+def test_remove_and_restore_file_objects(size, color, expected_removed_count):
+    """
+    Test remove_file_objects followed by restore_file_objects with multiple fake files.
+    """
+    fake_file_name = os.path.join(test_files_dir, f"fake_pdf_{size[0]}x{size[1]}_{color}.pdf")
+    fake_img_name = os.path.splitext(fake_file_name)[0] + ".png"
+
+    # Create a PDF with the specified size and color
+    if not os.path.exists(fake_file_name):
+        create_pdf(fake_file_name, size, color)
+    if not os.path.exists(fake_img_name):
+        create_image(fake_img_name, size, color)
+
+    lt_page = MockLTPage(pageid=3, bbox=(0, 0, PAGE_WIDTH, PAGE_HEIGHT))
+    # Inject the file object into lt_page._objs
+    lt_page.add_lt_figure((0, 0, 100, 100), (1, 0, 0, 1, 0, 0))
+
+    kwargs = {"bbox": (0, 0, size[0], size[1]), "file_name": fake_img_name}    
+    assert len(lt_page._objs) == 1 and isinstance(lt_page._objs[0], MockLTFigure), "LTPage should contain a single LTFigure object."
+
+    for _ in range(expected_removed_count):
+        lt_page._objs[0].add_lt_image(**kwargs)
+
+    # Remove
+    removed = remove_file_objects(lt_page)
+    assert len(removed) == expected_removed_count, f"Expected {expected_removed_count} removed file objects, got {len(removed)}."
+
+    # Restore
+    restore_file_objects(removed, lt_page)
+    restored = get_values_from_ltpage(lt_page, file_objects=removed)
+    assert len(restored) == expected_removed_count, f"Expected {expected_removed_count} restored file objects, got {len(lt_page._objs)}."
+    
+    for lt_image in lt_page._objs[0]:
+        assert isinstance(lt_image, LTImage), "Each element of the LTFigure should be an LTImage."
+        pdf_obj_ref = lt_image.colorspace[1]
+        assert isinstance(pdf_obj_ref, PDFObjRef), "Each colorspace should have a PDFObjRef."
+        parser = pdf_obj_ref.doc._parser
+        assert isinstance(parser, MockPDFParser), "Each PDFObjRef should have a MockPDFParser."
+        restored_item = parser.fp
+        assert restored_item is not None, "Each restored file should not be None."
+
+    second_removal = remove_file_objects(lt_page)
+    assert second_removal == removed, "Second removal should return the same list of removed file objects."
+
+
+
