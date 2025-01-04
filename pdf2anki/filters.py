@@ -3,16 +3,13 @@
 This module contains the internal representation of heading filters, which are
 used to test if a span should be included in the ToC.
 """
-
-from re import Pattern
-
 import re
 from typing import Dict, Optional, Set, Tuple, Union, List, overload, override
-from pdf2anki.extraction import ParagraphInfo, LineInfo
-from dataclasses import dataclass
+from pdf2anki.elements import ParagraphInfo, LineInfo
+from dataclasses import dataclass, field
 from multipledispatch import dispatch
 
-from pdf2anki.utils import contained_in_bbox, get_average, concat_bboxes, get_y_overlap
+from pdf2anki.utils import contained_in_bbox, get_average, is_valid_arg
 
 DEF_TOLERANCE: dict = {"font": 1e-1, "bbox": 1e-1, "text": 1e-1}
 
@@ -22,11 +19,12 @@ class ToCEntry:
     title: str
     pagenum: int
     bbox: Tuple[float, float, float, float]
-    page_range: Optional[List[int]] = None
+    page_range: Optional[List[int]] = field(default_factory=List[str])
     start_vpos: Optional[float] = None
     end_vpos: Optional[float] = None
-    text: Optional[str] = None
-    subsections: Optional[List["ToCEntry"]] = None
+    text_filter_ids: Optional[Set[int]] = field(default_factory=Set[str])
+    text: Optional[List[str]] = field(default_factory=List[str])
+    subsections: Optional[List["ToCEntry"]] = field(default_factory=List["ToCEntry"])
 
     def __repr__(self):
         return f"ToCEntry(level={self.level}, title={self.title}, page={self.page_range}, vpos={self.vpos}, bbox={self.bbox}, text={self.text})"
@@ -125,7 +123,7 @@ class FontFilter:
         """
         if opts is None:
             opts = FontFilterOptions()
-        elif isinstance(opts, dict):
+        elif is_valid_arg(opts, Dict[str, Union[bool, float, Optional[re.Pattern]]]):
             opts = FontFilterOptions(**opts)
         vars = FontFilterVars( 
             names = paragraph_info.fonts,
@@ -161,7 +159,7 @@ class FontFilter:
 
         if opts is None:
             opts = FontFilterOptions()
-        elif isinstance(opts, dict):
+        elif is_valid_arg(opts, Dict[str, Union[bool, float, Optional[re.Pattern]]]):
             opts = FontFilterOptions(**opts)
         vars = FontFilterVars(
             names=line_info.fonts,
@@ -323,7 +321,7 @@ class BoundingBoxFilter:
         """
         if opts is None:
             opts = BoundingBoxFilterOptions()
-        elif isinstance(opts, dict):
+        elif is_valid_arg(opts, Dict[str, Union[bool, float]]):
             opts = BoundingBoxFilterOptions(**opts)
         vars = BoundingBoxFilterVars(
             left=paragraph_info.bbox[0],
@@ -357,7 +355,7 @@ class BoundingBoxFilter:
         """
         if opts is None:
             opts = BoundingBoxFilterOptions()
-        elif isinstance(opts, dict):
+        elif is_valid_arg(opts, Dict[str, Union[bool, float]]):
             opts = BoundingBoxFilterOptions(**opts)
         vars = BoundingBoxFilterVars(
             left=line_info.bbox[0],
@@ -500,7 +498,7 @@ class BoundingBoxFilter:
 class TextFilterOptions:
     """Options for configuring the TextFilter."""
     check_font: bool = True
-    check_bbox: bool = True
+    check_bbox: bool = False
     check_header: bool = False
     tolerance: float = DEF_TOLERANCE["text"]
 
@@ -557,25 +555,63 @@ class TextFilter:
             TextFilter: The created TextFilter.
         """
         if opts is None:
-            opts = TextFilterOptions()
+            opts = TextFilterOptions(check_bbox=False)
 
-        elif isinstance(opts, Dict[str, Union[FontFilterOptions, TextFilterOptions, BoundingBoxFilterOptions]]):
+        elif is_valid_arg(opts, Dict[str, Union[bool, float, Optional[re.Pattern]]]):
             font_opts = opts.get('font', None)
             bbox_opts = opts.get('bbox', None)
-            opts = TextFilterOptions(**opts.get('text', {}))
+            opts = TextFilterOptions(**opts.get('text', {"check_bbox": False}))
 
-        elif isinstance(opts, Dict[str, Union[bool, float, FontFilterOptions, BoundingBoxFilterOptions]]):
+        elif is_valid_arg(opts, Dict[str, Union[bool, float, FontFilterOptions, BoundingBoxFilterOptions]]):
             font_opts = opts.get('font', None)
             bbox_opts = opts.get('bbox', None)
             opts = TextFilterOptions(
                 check_font=opts.get('check_font', True),
-                check_bbox=opts.get('check_bbox', True),
+                check_bbox=opts.get('check_bbox', False),
                 check_header=opts.get('check_header', False),
                 tolerance=opts.get('tolerance', DEF_TOLERANCE["text"])
             )
-        
+        assert isinstance(opts, TextFilterOptions)
+        assert isinstance(font_opts, FontFilterOptions) or font_opts is None
+        assert isinstance(bbox_opts, BoundingBoxFilterOptions) or bbox_opts is None
+        assert isinstance(header, ToCEntry) or header is None
+
+        # if the fail all the arg checks, then we know that opts is a TextFilterOptions object
         font_filter = FontFilter.from_paragraph_info(paragraph_info, font_opts)
         bbox_filter = BoundingBoxFilter.from_paragraph_info(paragraph_info, bbox_opts)
+
+        vars = TextFilterVars(
+            font=font_filter,
+            bbox=bbox_filter,
+            header=header
+        )
+
+        return cls(vars, opts)
+    
+    @classmethod
+    def from_dict(cls, fltr_dict: Dict[str, Union[bool, FontFilterOptions, BoundingBoxFilterOptions, ToCEntry]]) -> 'TextFilter':
+        """
+        Create a TextFilter from a dictionary.
+
+        Args:
+            fltr_dict (Dict): The dictionary containing filter configuration.
+
+        Returns:
+            TextFilter: The created TextFilter.
+        """
+        opts = TextFilterOptions(
+            check_font=fltr_dict.get('check_font', True),
+            check_bbox=fltr_dict.get('check_bbox', False),
+            check_header=fltr_dict.get('check_header', False),
+            tolerance=fltr_dict.get('tolerance', DEF_TOLERANCE["text"])
+        )
+
+        font_opts = fltr_dict.get('font_opts', {})
+        bbox_opts = fltr_dict.get('bbox_opts', {})
+        header = fltr_dict.get('header', {})
+
+        font_filter = FontFilter.from_dict(fltr_dict.get('font', {}), font_opts)
+        bbox_filter = BoundingBoxFilter.from_dict(fltr_dict.get('bbox', {}), bbox_opts)
 
         vars = TextFilterVars(
             font=font_filter,
@@ -656,7 +692,7 @@ class ToCFilter:
 
     @classmethod
     def from_paragraph_info(cls, paragraph_info: ParagraphInfo, 
-                            fltr_dict: Dict[str, Union[bool, FontFilterOptions, BoundingBoxFilterOptions]]) -> 'ToCFilter':
+                            fltr_dict: dict[str, Union[bool, FontFilterOptions, BoundingBoxFilterOptions]]) -> 'ToCFilter':
         """
         Create a ToCFilter from a ParagraphInfo object.
 
@@ -690,73 +726,72 @@ class ToCFilter:
 
         return cls(vars, opts)
     
+    @overload
     @classmethod
     def from_line_info(cls, line_info: LineInfo, 
-                       fltr_dict: Dict[str, Union[int, bool, FontFilterOptions, BoundingBoxFilterOptions]]) -> 'ToCFilter':
-        """
-        Create a ToCFilter from a LineInfo object.
+                       level: int, 
+                       opts: Optional[Dict[str, Union[bool, FontFilterOptions, BoundingBoxFilterOptions]]] = None) -> 'ToCFilter': 
+        ...
 
-        Args:
-            line_info (LineInfo): The LineInfo object.
-            fltr_dict (Dict): The dictionary containing filter configuration.
-
-        Returns:
-            ToCFilter: The created ToCFilter.
-        """
-        lvl = fltr_dict.get('level')
-        if lvl is None:
-            raise ValueError("filter's 'level' is not set")
-        if lvl < 1:
-            raise ValueError("filter's 'level' must be >= 1")
-
-        opts = ToCFilterOptions(
-            check_font=fltr_dict.get('check_font', True),
-            check_bbox=fltr_dict.get('check_bbox', True),
-            greedy=fltr_dict.get('greedy', False)
-        )
-
-        font_filter = FontFilter.from_line_info(line_info, fltr_dict.get('font', {}))
-        bbox_filter = BoundingBoxFilter.from_line_info(line_info, fltr_dict.get('bbox', {}))
-
-        vars = ToCFilterVars(
-            level=lvl,
-            font=font_filter,
-            bbox=bbox_filter
-        )
-
-        return cls(vars, opts)
-    
-    @override
+    @overload
     @classmethod
     def from_line_info(cls, line_info: LineInfo,
-                       fltr_dict: Dict[str, Union[int, bool, Dict[str, Union[str, float, bool]]]]) -> 'ToCFilter':
+                       level: int, 
+                       opts: Optional[Dict[str, Dict[str, Union[str, int, bool]]]] = None) -> 'ToCFilter': 
+        ...
+
+    @overload
+    @classmethod
+    def from_line_info(cls, line_info: LineInfo,
+                       level: int, 
+                       opts: Optional[Dict[str, Union[ToCFilterOptions, FontFilterOptions, BoundingBoxFilterOptions]]] = None) -> 'ToCFilter': 
+        ...
+
+    @classmethod
+    def from_line_info(cls, line_info: LineInfo,
+                       level: int, 
+                       opts: Optional[Dict[str, Union[Dict[str, Union[str, float, bool]], bool, FontFilterOptions, BoundingBoxFilterOptions, ToCFilterOptions]]] = None) -> 'ToCFilter':
         """
         Create a ToCFilter from a LineInfo object.
 
         Args:
             line_info (LineInfo): The LineInfo object.
-            fltr_dict (Dict): The dictionary containing filter configuration.
+            level (int): The level of the ToCFilter.
+            opts (Optional[Union[Dict[str, Union[str, float, bool]], FontFilterOptions, BoundingBoxFilterOptions, ToCFilterOptions]]): The options for configuring the filter.
 
         Returns:
             ToCFilter: The created ToCFilter.
         """
-        lvl = fltr_dict.get('level')
-        if lvl is None:
-            raise ValueError("filter's 'level' is not set")
-        if lvl < 1:
+        if level < 1:
             raise ValueError("filter's 'level' must be >= 1")
         
-        opts = ToCFilterOptions(
-            check_font=fltr_dict.get('check_font', True),
-            check_bbox=fltr_dict.get('check_bbox', True),
-            greedy=fltr_dict.get('greedy', False)
-        )
+        if opts is None:
+            opts = {"toc": ToCFilterOptions(), "font": FontFilterOptions(), "bbox": BoundingBoxFilterOptions()}
+        elif is_valid_arg(opts, Dict[str, Union[bool, FontFilterOptions, BoundingBoxFilterOptions]]):
+            font_opts = opts.get('font', FontFilterOptions())
+            bbox_opts = opts.get('bbox', BoundingBoxFilterOptions())
+            opts = ToCFilterOptions(
+                    check_font=opts.get('check_font', True),
+                    check_bbox=opts.get('check_bbox', True),
+                    greedy=opts.get('greedy', False)
+            )
+        elif is_valid_arg(opts, Dict[str, Dict[str, Union[str, float, bool]]]):
+            font_opts = FontFilterOptions(**opts.get('font', {}))
+            bbox_opts = BoundingBoxFilterOptions(**opts.get('bbox', {}))
+            opts = ToCFilterOptions(**opts.get('toc', {}))
+        
+        elif is_valid_arg(opts, Dict[str, Union[ToCFilterOptions, FontFilterOptions, BoundingBoxFilterOptions]]):
+            font_opts = opts.get('font', FontFilterOptions())
+            bbox_opts = opts.get('bbox', BoundingBoxFilterOptions())
+            opts = opts.get('toc', ToCFilterOptions())
+        else:
+            raise ValueError("Invalid argument types for 'opts'")
 
-        font_filter = FontFilter.from_line_info(line_info, fltr_dict.get('font', {}))
-        bbox_filter = BoundingBoxFilter.from_line_info(line_info, fltr_dict.get('bbox', {}))
+        font_filter = FontFilter.from_line_info(line_info, font_opts)
+        bbox_filter = BoundingBoxFilter.from_line_info(line_info, bbox_opts)
 
         vars = ToCFilterVars(
-            level=lvl,
+            level=level,
             font=font_filter,
             bbox=bbox_filter
         )
@@ -817,4 +852,4 @@ class ToCFilter:
 
     def __repr__(self):
         return (f"ToCFilter(vars={self.vars}, opts={self.opts})")
-    
+
