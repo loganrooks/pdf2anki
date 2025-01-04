@@ -205,7 +205,6 @@ def extract_char_info(ltchar: LTChar) -> CharInfo:
         width=ltchar.width
     )
 
-@log_time
 def extract_text_from_figure(figure, clip: Optional[Tuple[float]] = None) -> List[CharInfo]:
     text_elements = []
     for element in figure:
@@ -283,7 +282,6 @@ def extract_words_from_text(text_elements: List[CharInfo], separator: Optional[s
 
     return words
 
-@log_time
 def extract_lines_from_text_elements(text_elements: List[CharInfo], char_margin_factor: float = 0.5, line_overlap_factor: float = 0.5, interrupt_chars: str = "-") -> List[LineInfo]:
     lines = []
     current_line = []
