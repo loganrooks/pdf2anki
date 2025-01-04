@@ -1,4 +1,5 @@
 import pdb
+import pickle
 from PIL import Image
 from typing import Any, Callable, List
 import pytest
@@ -9,8 +10,10 @@ from pdf2anki.extraction import (
     extract_page_info,
     process_ltpages,
     remove_file_objects,
+    remove_lt_images,
     restore_file_objects,
-    get_values_from_ltpage
+    get_values_from_ltpage,
+    save_and_remove_images
 )
 
 from pdf2anki.utils import concat_bboxes
@@ -380,9 +383,9 @@ class MockLTContainer(LTContainer):
     def __iter__(self):
         return iter(self._objs)
     
-    def add_lt_image(self, bbox, file_name):
+    def add_lt_image(self, bbox, file_name, create_pdf=True):
         j = len([obj for obj in self._objs if isinstance(obj, LTImage)])
-        img = MockLTImage(bbox, file_name, i=j)
+        img = MockLTImage(bbox, file_name, create_pdf=create_pdf, i=j)
         self._objs.append(img)
         return self
     
@@ -427,13 +430,14 @@ class MockPDFObjRef(PDFObjRef):
 
     
 class MockPDFStream(PDFStream):
-    def __init__(self, file_name, type: StreamType = StreamType.IMAGE, i=0):
+    def __init__(self, file_name, create_pdf: bool = True, type: StreamType = StreamType.IMAGE, i=0):
+        
         pdf_file_name = os.path.splitext(file_name)[0] + ".pdf"
         if type == StreamType.IMAGE:
             with Image.open(file_name, 'r') as img:
                 width, height = img.size
                 bits_per_component = 8 if img.mode in ["RGB", "L"] else 1  # Adjust based on mode
-                color_space = "DeviceRGB" if img.mode == "RGB" else "DeviceGray"
+                color_space = "DeviceRGB" if img.mode in ["RGB", "L"] else "DeviceGray"
                 length = len(img.tobytes())
                 rawdata = img.tobytes()
 
@@ -449,7 +453,7 @@ class MockPDFStream(PDFStream):
                         "Subtype": LIT("Image"),
                         "Width": width,
                         "Height": height,
-                        "ColorSpace": [LIT("ICCBased"), MockPDFObjRef(pdf_file_name, i)],
+                        "ColorSpace": [LIT("ICCBased"), MockPDFObjRef(pdf_file_name, i)] if create_pdf else [LIT(color_space)],
                         "BitsPerComponent": bits_per_component,
                         "DecodeParms": decode_params,
                         "Filter": LIT("FlateDecode"),  # Example value; adjust based on specific encoding
@@ -458,8 +462,8 @@ class MockPDFStream(PDFStream):
         super().__init__(attrs, rawdata)
 
 class MockLTImage(LTImage):
-    def __init__(self, bbox, file_name, i=0):
-        stream = MockPDFStream(file_name, type=StreamType.IMAGE)
+    def __init__(self, bbox, file_name, i=0, create_pdf=True):
+        stream = MockPDFStream(file_name, create_pdf, type=StreamType.IMAGE)
         stream.decode()
         super().__init__(f"mock_img_{i}", stream, bbox)
 
@@ -605,6 +609,47 @@ def test_remove_and_restore_file_objects(size, color, expected_removed_count):
 
     second_removal = remove_file_objects(lt_page)
     assert second_removal == removed, "Second removal should return the same list of removed file objects."
+
+
+
+
+@pytest.fixture
+def mock_ltpage_with_figure_and_images():
+
+    image1_path = os.path.join(test_files_dir, "image1.png")
+    image2_path = os.path.join(test_files_dir, "image2.png")
+
+    if not os.path.exists(image1_path):
+        create_image(image1_path, (10, 10), "red")
+    if not os.path.exists(image2_path):
+        create_image(image2_path, (20, 20), "blue")
+
+    lt_page = MockLTPage(pageid=1, bbox=(0, 0, 100, 100))
+    lt_page.add_lt_figure(bbox=(0, 0, 50, 50), matrix=(1, 0, 0, 1, 0, 0))
+    assert isinstance(lt_page._objs[0], MockLTFigure), "LTPage should contain a single LTFigure object."
+    lt_page._objs[0].add_lt_image(bbox=(0, 0, 10, 10), file_name=image1_path, create_pdf=False)
+    lt_page._objs[0].add_lt_image(bbox=(10, 10, 30, 30), file_name=image2_path, create_pdf=False)
+    return lt_page
+
+def test_remove_lt_images(mock_ltpage_with_figure_and_images: Callable[[], LTPage]):
+    lt_page = mock_ltpage_with_figure_and_images
+    assert len(lt_page._objs[0]._objs) == 2, "There should be 2 images in the figure."
+    
+    cleaned_page = remove_lt_images(lt_page)
+    assert len(cleaned_page._objs[0]._objs) == 0, "All images should be removed from the figure."
+
+def test_save_and_remove_images(tmp_path, mock_ltpage_with_figure_and_images: Callable[[], LTPage]):
+    lt_page = mock_ltpage_with_figure_and_images
+    assert len(lt_page._objs[0]._objs) == 2, "There should be 2 images in the figure."
+    
+    filepath = tmp_path / "cleaned_pages.pkl"
+    save_and_remove_images([lt_page], str(filepath))
+    
+    with open(filepath, "rb") as f:
+        cleaned_pages = pickle.load(f)
+    
+    assert len(cleaned_pages) == 1, "There should be 1 cleaned page."
+    assert len(cleaned_pages[0]._objs[0]._objs) == 0, "All images should be removed from the figure in the saved page."
 
 
 

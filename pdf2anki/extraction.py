@@ -1,3 +1,4 @@
+import argparse
 import inspect
 import io
 import logging
@@ -8,13 +9,12 @@ import re
 import time
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type, Union, get_args
 from pdfminer.high_level import extract_pages
-from pdfminer.pdftypes import PDFStream
 from pdfminer.layout import LTPage, LAParams, LTChar, LTTextBoxHorizontal, LTTextLineHorizontal, LTFigure, LTComponent, LTImage
+from pdfminer.pdftypes import PDFStream
 from pdf2anki import config
 from pdf2anki.utils import get_averages, get_average, concat_bboxes, contained_in_bbox, get_y_overlap
 from pdf2anki.decorators import conditional_decorator, count_calls, log_time, progress_monitor
 from pdf2anki.elements import CharInfo, FileObject, LineInfo, ParagraphInfo, PageInfo, Primitive, FileType
-import argparse  # Import the global config.DEBUG flag
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -36,17 +36,26 @@ def get_values_from_ltpage(lt_page: LTPage, file_objects: List[FileObject]) -> L
         values.append(current)
     return values
 
-def remove_lt_images(page: LTPage) -> None:
-    def remove_images_from_figure(figure: LTFigure) -> None:
+def remove_lt_images(page: LTPage) -> LTPage:
+    def remove_images_from_figure(figure: LTFigure) -> LTFigure:
         figure._objs = [obj for obj in figure if not isinstance(obj, LTImage)]
         for obj in figure:
             if isinstance(obj, LTFigure):
                 remove_images_from_figure(obj)
+        return figure
 
     page._objs = [obj for obj in page if not isinstance(obj, LTImage)]
     for obj in page:
         if isinstance(obj, LTFigure):
             remove_images_from_figure(obj)
+    return page
+
+def save_and_remove_images(pages: List[LTPage], filepath: str) -> None:
+    assert all(isinstance(page, LTPage) for page in pages), "All elements in the list must be LTPage objects."
+    cleaned_pages = [remove_lt_images(page) for page in pages]
+
+    with open(filepath, "wb") as f:
+        pickle.dump(cleaned_pages, f)
 
 @conditional_decorator(count_calls(track_args=["obj", "path"]), config.DEBUG)
 def remove_file_objects(
