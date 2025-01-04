@@ -9,6 +9,172 @@ from pdf2anki.elements import CharInfo, LineInfo, ParagraphInfo, PageInfo
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# HANDLING SAVING AND LOADING OF PAGES
+
+def get_values_from_ltpage(lt_page: LTPage, file_objects: List[FileObject]) -> List[Any]:
+    """
+    Given an LTPage and a list of FileObjects, use the path attribute from each FileObject
+    to return the value in LTPage at the end of the path.
+    """
+    values = []
+    for file_obj in file_objects:
+        current = lt_page
+        for attr in file_obj.path:
+            current = getattr(current, attr, None)
+            if current is None:
+                break
+        values.append(current)
+    return values
+
+def remove_lt_images(page: LTPage) -> None:
+    def remove_images_from_figure(figure: LTFigure) -> None:
+        figure._objs = [obj for obj in figure if not isinstance(obj, LTImage)]
+        for obj in figure:
+            if isinstance(obj, LTFigure):
+                remove_images_from_figure(obj)
+
+    page._objs = [obj for obj in page if not isinstance(obj, LTImage)]
+    for obj in page:
+        if isinstance(obj, LTFigure):
+            remove_images_from_figure(obj)
+
+@conditional_decorator(count_calls(track_args=["obj", "path"]), config.DEBUG)
+def remove_file_objects(
+    obj: Union[LTComponent, Primitive, FileType],
+    path: str = "",
+    visited: Optional[Set[int]] = None,
+    start: Optional[str] = None,
+) -> List[FileObject]:
+    """Doing this not as a method to test whether it speeds up pickling"""
+
+    if start is not None and visited is None:
+        # Initialize the path string based on the start attribute
+        path = start
+        # Access the object at the initialized path
+        for part in re.split(r'\.|\[|\]', path):
+            if part.isdigit():
+                obj = obj[int(part)]
+            elif part:
+                obj = getattr(obj, part)
+        start = None
+
+    if visited is None:
+        visited = set()
+    if id(obj) in visited:
+        return []
+
+    visited.add(id(obj))
+    removed: List[FileObject] = []
+
+    # If this object itself is a file object
+    if isinstance(obj, get_args(FileType)):
+        file_obj = FileObject(path, type(obj), obj.name)
+        removed.append(file_obj)
+        return removed
+
+    # If it has attributes
+    elif hasattr(obj, "__dict__"):
+        for attr_name, attr_value in obj.__dict__.items():
+            subpath = f"{path}.{attr_name}" if path else attr_name
+            result = remove_file_objects(obj=attr_value, visited=visited, path=subpath)
+            removed.extend(result)
+
+            if result and subpath == removed[-1].path:
+                setattr(obj, attr_name, None)
+
+    # If it is an iterable
+    elif isinstance(obj, (list, tuple, set)):
+        new_items = []
+        for idx, item in enumerate(obj):
+            subpath = f"{path}[{idx}]"
+            result = remove_file_objects(obj=item, visited=visited, path=subpath)
+            removed.extend(result)
+            if not result or not subpath == removed[-1].path:
+                new_items.append(item)
+        if isinstance(obj, list):
+            obj[:] = new_items
+        elif isinstance(obj, tuple):
+            obj = tuple(new_items)
+        elif isinstance(obj, set):
+            obj.clear()
+            obj.update(new_items)
+    return removed
+
+def restore_file_objects(
+        file_objects: List[FileObject], 
+        obj: Any,
+        ) -> Any:
+    """
+    Restore file objects to the obj. A more general version of restore_lt_images.
+
+    Args:
+    """
+    if file_objects is None:
+        return obj
+
+    for file_obj in file_objects:
+        parts = [part for part in re.split(r'\.|\[|\]', file_obj.path) if part]
+        current_obj = obj
+        for part in parts[:-1]:
+            if part.isdigit():
+                # Then its an index and current_obj must be a list
+                # We must be careful that the list is not empty and try to index it
+
+                if int(part) >= len(current_obj):
+                    pdb.set_trace()
+                current_obj = current_obj[int(part)]
+            elif part:
+                current_obj = getattr(current_obj, part)
+        
+        last_part = parts[-1]
+        if last_part.isdigit():
+            
+            current_obj[int(last_part)] = file_obj.type(open(file_obj.name, "rb"))
+        elif last_part:
+            setattr(current_obj, last_part, file_obj.type(open(file_obj.name, "rb")))
+
+    return obj
+
+
+def save_pages(pages: List[LTPage], filepath: str) -> None:
+    assert all(isinstance(page, LTPage) for page in pages), "All elements in the list must be LTPage objects."
+    serializable_pages = []
+    all_file_objs: Dict[int, List[FileObject]] = {}
+
+    if config.DEBUG:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    for page in pages:
+        removed = remove_file_objects(page, start="._objs[1]._objs[0]")
+        all_file_objs[page.pageid] = removed
+        serializable_pages.append(page)
+    
+    if config.DEBUG:
+        logging.getLogger().setLevel(logging.INFO)
+
+    with open(filepath, "wb") as f:
+        pickle.dump((serializable_pages, all_file_objs), f)
+
+def load_pages(filepath: str) -> List[SerializableLTPage]:
+    with open(filepath, "rb") as f:
+        pages, all_file_objs = pickle.load(f)
+
+    assert isinstance(pages, Iterable), "The first element in the tuple must be an iterable."
+    assert isinstance(all_file_objs, dict), "The second element in the tuple must be a dictionary."
+
+    if config.DEBUG:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    for page in pages:
+        assert isinstance(page, LTPage), "All elements in the list must be SerializableLTPage objects."
+        file_objs = all_file_objs[page.pageid]
+        restore_file_objects(file_objs, page)
+
+    if config.DEBUG:
+        logging.getLogger().setLevel(logging.INFO)
+
+    return pages
+
 def extract_char_info(ltchar: LTChar) -> CharInfo:
     """
     Convert an LTChar object to a CharInfo dataclass.
