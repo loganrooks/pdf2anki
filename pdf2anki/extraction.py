@@ -218,6 +218,19 @@ def extract_char_info(ltchar: LTChar) -> CharInfo:
         width=ltchar.width
     )
 
+def filter_anomalies(chars: List[CharInfo], min_size: float = 5.0, min_width = 2.5) -> List[CharInfo]:
+    """
+    Filter out anomalies such as flecks of dirt that are registered as characters.
+
+    Args:
+        chars (List[CharInfo]): List of CharInfo objects.
+        min_size (float): Minimum size threshold for characters to be considered valid.
+
+    Returns:
+        List[CharInfo]: Filtered list of CharInfo objects.
+    """
+    return [char for char in chars if char.size >= min_size]
+
 def extract_text_from_figure(figure, clip: Optional[Tuple[float]] = None) -> List[CharInfo]:
     text_elements = []
     for element in figure:
@@ -226,7 +239,7 @@ def extract_text_from_figure(figure, clip: Optional[Tuple[float]] = None) -> Lis
                 text_elements.append(extract_char_info(element))
         elif isinstance(element, (LTTextBoxHorizontal, LTTextLineHorizontal, LTFigure)):
             text_elements.extend(extract_text_from_figure(element, clip))
-    return text_elements
+    return filter_anomalies(text_elements)
 
 def extract_line_info(line: List[CharInfo], interrupt_chars: str = "-") -> LineInfo:
     """
@@ -295,6 +308,18 @@ def extract_words_from_text(text_elements: List[CharInfo], separator: Optional[s
 
     return words
 
+def is_non_alphanumeric_line(line: List[CharInfo]) -> bool:
+    """
+    Check if a line consists only of non-alphanumeric characters.
+
+    Args:
+        line (List[CharInfo]): The line to check.
+
+    Returns:
+        bool: True if the line consists only of non-alphanumeric characters, False otherwise.
+    """
+    return all(not char.text.isalnum() for char in line)
+
 def extract_lines_from_text_elements(text_elements: List[CharInfo], char_margin_factor: float = 0.5, line_overlap_factor: float = 0.5, interrupt_chars: str = "-") -> List[LineInfo]:
     lines = []
     current_line = []
@@ -315,8 +340,11 @@ def extract_lines_from_text_elements(text_elements: List[CharInfo], char_margin_
                 current_line.append(element)
                 last_element = element
             else:
-                current_line_info = extract_line_info(current_line, interrupt_chars=interrupt_chars)
-                lines.append(current_line_info)
+                if not is_non_alphanumeric_line(current_line) or len(current_line) > 10: # Just a small check to keep the lines from bad OCR away
+                    current_line_info = extract_line_info(current_line, interrupt_chars=interrupt_chars)
+                    lines.append(current_line_info)
+                else:
+                    logging.debug(f"Encountered non-alphanumeric line: {''.join(char.text for char in current_line)} \nPrevious two lines: \n{''.join(lines[-2].text) if len(lines) > 1 else ''}\n{''.join(lines[-1].text) if lines else ''}")
                 current_line = [element]
                 last_element = element
 
@@ -440,7 +468,7 @@ def extract_page_info(page: List[ParagraphInfo], tolerance: float = 1e-1) -> Pag
 
 
 
-@log_time
+# @log_time
 def extract_paragraphs_from_page(page: LTPage, 
                                  pagenum: Optional[int] = None,
                                  char_margin_factor: float = 4.0, 
@@ -500,7 +528,7 @@ def main():
     def parse_arguments():
         parser = argparse.ArgumentParser(description="Process PDF and extract text information.")
         parser.add_argument("pdf_path", type=str, help="Path to the PDF file to be processed.")
-        parser.add_argument("-o", "--out", type=str, default="processed_pages.pkl", help="Output file path for the processed pages.")
+        parser.add_argument("-o", "--out", type=str, help="Output file path for the processed pages.")
         parser.add_argument("-sd", "--save_doc", action="store_true", help="Save the document object [list of LTPages] to a file.")
         parser.add_argument("-d", "--doc_path", type=str, help="Path to the document object [list of LTPages] file.")
         parser.add_argument("-gd", "--generate_doc", action="store_true", help="Process the PDF from scratch.")
@@ -520,7 +548,7 @@ def main():
     
 
     if config.DEBUG:
-        max_pages = 10
+        max_pages = 0
         pdf_path = "/home/rookslog/pdf2anki/examples/pathmarks_ocr.pdf"
         doc_path = os.path.splitext(pdf_path)[0] + f"_doc_test.pkl"
         print(f"Debug mode is on. Processing only the first {max_pages} pages.")
@@ -534,8 +562,9 @@ def main():
 
         print(f"Document exists at {doc_path}. Loading...")
         try:
-            start_time = time.time()    
-            doc = load_and_restore_pages(doc_path)
+            start_time = time.time()
+            with open(doc_path, "rb") as doc_file:    
+                doc = pickle.load(doc_file)
             end_time = time.time()
             print("Loaded in {:.4f} seconds.\n".format(end_time - start_time))
         except IOError as e:
@@ -568,7 +597,7 @@ def main():
         print(f"Saving document to {doc_path}...")
         try:
             start_time = time.time()
-            save_pages_file_objs(doc, doc_path)
+            save_and_remove_images(doc, doc_path)
             end_time = time.time()
             print(f"Succesfully saved document in {end_time - start_time:.4f} seconds.\n")
         except Exception as e:
@@ -583,7 +612,7 @@ def main():
     processed_pages = process_ltpages(doc, char_margin_factor=params.char_margin, line_margin_factor=params.line_margin, margins=margins, bbox_overlap=bbox_overlap, verbose=args.verbose)
     print(f"Processed {len(processed_pages)} pages.")
 
-    output_file_path = os.splitext(args.pdf_path)[0] + "processed_pages.pkl" if args.__dict__.get("out", None) is None else args.out
+    output_file_path = os.path.splitext(args.pdf_path)[0] + "processed_pages.pkl" if args.__dict__.get("out", None) is None else args.out
     print(f"Saving processed pages to {output_file_path}...")
     with open(output_file_path, "wb") as output_file:
         pickle.dump(processed_pages, output_file)
