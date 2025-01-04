@@ -1,5 +1,51 @@
+from typing import Optional, Union, Dict
+import pdb
 import pytest
-from pdf2anki.utils import get_average, get_averages, is_valid_dict
+from pdf2anki.filters import FontFilter, FontFilterVars, FontFilterOptions, BoundingBoxFilter, BoundingBoxFilterVars, BoundingBoxFilterOptions, TextFilter, TextFilterVars, TextFilterOptions, ToCFilterOptions
+from pdf2anki.utils import get_average, get_averages, is_valid_arg
+from typing import Any, Union, Optional, Dict, List, Set, Tuple, get_origin, get_args
+
+@pytest.mark.parametrize(
+    "numbers, expected",
+    [
+        ([], 0),
+        ([10, 20, 30], 20),
+        ([1.5, 2.5], 2.0),
+    ],
+)
+def test_get_average_param(numbers, expected):
+    assert get_average(numbers) == pytest.approx(expected)
+
+@pytest.mark.parametrize(
+    "numbers,tolerance,expected_count",
+    [
+        ([], 1.0, 0),
+        ([10, 11, 12, 13], 5.0, 1),
+        ([10, 20, 21, 100, 105], 5.0, 3),
+        ([10, 20, 21, 22, 100, 110], 10, 3),
+    ],
+)
+def test_get_averages_param(numbers, tolerance, expected_count):
+    result = get_averages(numbers, tolerance)
+    assert len(result) == expected_count
+
+@pytest.mark.parametrize(
+    "value,type_hint,expected",
+    [
+        (42, int, True),
+        ("42", int, False),
+        (None, Optional[int], True),
+        ({"key": 2}, Dict[str, int], True),
+        ({"key": "val"}, Dict[str, int], False),
+        ([1, 2, 3], Union[List[int], Set[int]], True),
+        ({"a", "b"}, Union[List[int], Set[int]], True),
+        ((1, 2, 3), Tuple[int, ...], True),
+        ((1, "two"), Tuple[int, str], True),
+        ((1, 2), Tuple[int, str], False),
+    ],
+)
+def test_is_valid_arg_param(value, type_hint, expected):
+    assert is_valid_arg(value, type_hint) == expected
 
 def test_get_average_empty_list():
     assert get_average([]) == 0
@@ -33,82 +79,40 @@ def test_get_averages_exact_partition():
     assert abs(result[1] - 21) < 1.0
     assert abs(result[2] - 105) < 5.0
 
-def test_is_valid_dict_all_valid():
-    admissible_types = {
-        "name": str,
-        "age": int,
-        "height": float
-    }
-    d = {
-        "name": "John",
-        "age": 30,
-        "height": 5.9
-    }
-    assert is_valid_dict(d, admissible_types) == True
+@pytest.mark.parametrize(
+    "value,hint,expected",
+    [
+        (42, int, True),
+        ("42", int, False),
+        (3.14, float, True),
+        (True, bool, True),
+        ("true", bool, False),
+        (None, Optional[int], True),
+        ({1, 2, 3}, Set[int], True),
+        ({1, "two"}, Set[int], False),
+        ([1, 2, 3], List[int], True),
+        ([1, "two"], List[int], False),
+        ({"key": 10}, Dict[str, int], True),
+        ({"key": "val"}, Dict[str, int], False),
+        ((1, 2), Tuple[int, int], True),
+        ((1, "2"), Tuple[int, int], False),
+        ((1, 2, 3), Tuple[int, ...], True),
+        ((1, 2, 3), Tuple[str, ...], False),
+        ([1, 2, 3], Union[List[int], Set[int]], True),
+        ({"a", "b"}, Union[List[int], Set[str]], True),
+        (None, Any, True),
+        ({"check_font": True, "check_bbox": True, "bbox": BoundingBoxFilterOptions()}, Dict[str, Union[bool, FontFilterOptions, BoundingBoxFilterOptions]], True),
+        ({"toc": ToCFilterOptions(), "bbox": BoundingBoxFilterOptions()}, Dict[str, Union[bool, FontFilterOptions, BoundingBoxFilterOptions]], False),
+        ({"check_font": True, "check_bbox": True, "bbox": BoundingBoxFilterOptions()}, Dict[str, Union[ToCFilterOptions, FontFilterOptions, BoundingBoxFilterOptions]], False),
+        ({"toc": ToCFilterOptions(), "bbox": BoundingBoxFilterOptions(), "font": FontFilterOptions()}, Dict[str, Union[ToCFilterOptions, FontFilterOptions, BoundingBoxFilterOptions]], True)
 
-def test_is_valid_dict_invalid_type():
-    admissible_types = {
-        "name": str,
-        "age": int,
-        "height": float
-    }
-    d = {
-        "name": "John",
-        "age": "thirty",  # Invalid type
-        "height": 5.9
-    }
-    assert is_valid_dict(d, admissible_types) == False
-
-def test_is_valid_dict_missing_key():
-    admissible_types = {
-        "name": str,
-        "age": int,
-        "height": float
-    }
-    d = {
-        "name": "John",
-        "height": 5.9
-    }
-    assert is_valid_dict(d, admissible_types) == True  # Missing key is allowed
-
-def test_is_valid_dict_extra_key():
-    admissible_types = {
-        "name": str,
-        "age": int,
-        "height": float
-    }
-    d = {
-        "name": "John",
-        "age": 30,
-        "height": 5.9,
-        "weight": 70  # Extra key
-    }
-    assert is_valid_dict(d, admissible_types) == True  # Extra key is allowed
-
-def test_is_valid_dict_nested_dict():
-    admissible_types = {
-        "name": str,
-        "details": dict
-    }
-    d = {
-        "name": "John",
-        "details": {
-            "age": 30,
-            "height": 5.9
-        }
-    }
-    assert is_valid_dict(d, admissible_types) == True
-
-def test_is_valid_dict_nested_dict_invalid():
-    admissible_types = {
-        "name": str,
-        "details": dict
-    }
-    d = {
-        "name": "John",
-        "details": "invalid"  # Invalid type
-    }
-    assert is_valid_dict(d, admissible_types) == False
+    ],
+)
+def test_is_valid_arg_param(value, hint, expected):
+    """
+    Parametrized tests for is_valid_arg to cover basic, optional, union, set, list, dict, tuple, etc.
+    """
+    assert is_valid_arg(value, hint) == expected
 
 if __name__ == "__main__":
     pytest.main()
