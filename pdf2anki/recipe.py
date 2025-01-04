@@ -244,83 +244,188 @@ class Recipe:
                     if not text_filter_ids:
                         del self.toc_to_text_map[toc_filter_id]
 
+    def extract_headers(self, paragraphs: List[ParagraphInfo], pagenum: int) -> List[ToCEntry]:
         toc_entries = []
-        for paragraph in page.paragraphs:
-            entry = self.extract_paragraph(paragraph, page.page_number)
-            if entry:
-                toc_entries.append(entry)
+        for paragraph in paragraphs:
+            for toc_filter_id, toc_filter in self.toc_filters.items():
+                if toc_filter.admits(paragraph):
+                    entry = ToCEntry(
+                        level=toc_filter.vars.level,
+                        title=paragraph.text.strip(),
+                        page=pagenum,
+                        vpos=paragraph.bbox[3],  # top y-value as vertical position
+                        bbox=paragraph.bbox,
+                        text=paragraph.text,
+                        subsections=[]
+                    )
+                    # Associate matched TextFilters for later use
+                    entry.text_filter_ids = self.toc_to_text_map.get(toc_filter_id, {})
+                    toc_entries.append(entry)
+                    break  # if multiple filters match, we can stop at the first
         return toc_entries
 
-    def extract_paragraph(self, paragraph: ParagraphInfo, pagenum: int) -> Optional[ToCEntry]:
-        """
-        Extract a paragraph into a ToCEntry using ParagraphInfo dataclass.
-        """
-        try:
-            frags = chain.from_iterable([
-                self._extract_line(line) for line in paragraph.lines
-            ])
-            titles = concatFrag(frags)
-            return ToCEntry(
-                level=titles['level'],
-                title=titles['title'],
-                page_range=pagenum,
-                vpos=paragraph.vpos,
-                bbox=paragraph.bbox,
-                text=paragraph.text,
-                subsections=[]
-            )
-        except FoundGreedy as e:
-            # Handle greedy extraction
-            return ToCEntry(
-                level=0,
-                title=paragraph.text,
-                page_range=pagenum,
-                vpos=paragraph.vpos,
-                bbox=paragraph.bbox
-            )
+    def extract_text_for_headers(self, doc: List[PageInfo], toc_entries: List[ToCEntry]) -> None:
+        for i, entry in enumerate(toc_entries):
+            merged_text = []
+            end_page = toc_entries[i+1].pagenum if i+1 < len(toc_entries) else None
+            end_vpos = toc_entries[i+1].bbox[3] if i+1 < len(toc_entries) else None
+            for page in doc:
+                if page.pagenum < entry.pagenum:
+                    continue
+                if end_page is not None and page.pagenum >= end_page:
+                    break
 
+                for paragraph in page.paragraphs:
+                    if page.pagenum == entry.pagenum and paragraph.bbox[3] > entry.start_vpos:
+                        # skip paragraphs above the header
+                        continue
+                    if end_page is not None and page.pagenum == end_page - 1 and paragraph.bbox[3] <= end_vpos:
+                        # stop at next header's vpos
+                        break
+                    for text_filter_id in entry.text_filter_ids:
+                        text_filter = self.text_filters[text_filter_id]
+                        if text_filter.admits(paragraph):
+                            merged_text.append(paragraph.text)
+                            break
 
-@log_time
+            entry.text = entry.title + "\n\n" + "\n".join(merged_text)
+
+    def extract_toc(self, doc: List[PageInfo], page_range: Optional[Tuple[int, int]] = None, extract_text: bool = False) -> List[ToCEntry]:
+        all_toc_entries = []
+        if page_range:
+            start_page, end_page = page_range
+            if start_page < 1 or end_page > len(doc) or start_page > end_page:
+                raise ValueError("Invalid page range specified.")
+        else:
+            start_page, end_page = 1, len(doc)
+
+        for page in doc[start_page-1:end_page]:
+            page_entries = self.extract_headers(page.paragraphs, page.pagenum)
+            all_toc_entries.extend(page_entries)
+
+        if extract_text:
+            self.extract_text_for_headers(doc, all_toc_entries)
+
+        return all_toc_entries
+
+@overload
 def search_in_page(regex: re.Pattern, 
-                   page_num: int, 
                    page: PageInfo, 
-                   ign_pattern: Optional[Pattern] = None, 
-                   char_margin_factor: float = 0.5, 
-                   clip: Optional[Tuple[float]] = None) -> List[dict]:
-    """Search for `text` in `page` and extract meta
+                   start_vpos: Optional[float], 
+                   ign_pattern: Optional[Pattern],
+                   clip: Optional[Tuple[float]], 
+                   tolerance: float, 
+                   element_type: Literal[ElementType.LINE]) -> List[LineInfo]: ...
 
-    Arguments
-      regex: the compiled regex pattern to search for
-      page_num: the page number (1-based index)
-      text_info: the extracted text information from the PDF
-      ign_pattern: an optional pattern to ignore certain text
+@overload
+def search_in_page(regex: re.Pattern, 
+                   page: PageInfo, 
+                   start_vpos: Optional[float], 
+                   ign_pattern: Optional[Pattern],
+                   clip: Optional[Tuple[float]], 
+                   tolerance: float, 
+                   element_type: Literal[ElementType.PARAGRAPH]) -> List[ParagraphInfo]: ...
 
-    Returns
-      a list of meta
-    """
-    def clean_text(text):
-        return ' '.join(text.split()).replace('“', '"').replace('”', '"').replace("’", "'").lstrip()
+@overload
+def search_in_page(regex: re.Pattern, 
+                   page: PageInfo, 
+                   start_vpos: Optional[float], 
+                   ign_pattern: Optional[Pattern],
+                   clip: Optional[Tuple[float]], 
+                   tolerance: float, 
+                   element_type: Literal[ElementType.PAGE]) -> List[PageInfo]: ...
 
+def extract_lines(regex: re.Pattern, 
+                  page: PageInfo, 
+                  start_vpos: Optional[float], 
+                  ign_pattern: Optional[Pattern],
+                  clip: Optional[Tuple[float]], 
+                  tolerance: float = DEFAULT_TOLERANCE) -> List[LineInfo]:
     result = []
-    page_lines = extract_lines_from_figure(page, char_margin_factor=char_margin_factor, clip=clip)
+    page_lines = [line for paragraph in page.paragraphs for line in paragraph.lines if contained_in_bbox(line.bbox, clip, bbox_overlap=1-tolerance)] \
+                        if clip is not None else [line for paragraph in page.paragraphs for line in paragraph.lines]
+    
+    start_index = 0
+    if start_vpos is not None:
+        vpos = page.bbox[3]
+        while vpos > start_vpos:
+            start_index += 1
+            vpos = page_lines[start_index].bbox[3]
 
-    for line in page_lines:
-        line_text = clean_text(line["text"])
+    for line in page_lines[start_index:]:
+        line_text = clean_text(line.text)
         if regex.search(line_text):
-            is_upper = re.sub(ign_pattern, "", line_text).isupper() if ign_pattern else line_text.isupper()
-            result.append({
-                "page_num": page_num,
-                "text": line_text,
-                "font": line["font"],
-                "color": line["color"],
-                "size": line["size"],
-                "char_width": line["char_width"],
-                "bbox": line["bbox"],
-                "is_upper": is_upper
-            })
-
+            result.append(line)
     return result
 
+def extract_paragraphs(regex: re.Pattern, 
+                       page: PageInfo, 
+                       start_vpos: Optional[float], 
+                       ign_pattern: Optional[Pattern],
+                       clip: Optional[Tuple[float]], 
+                       tolerance: float = DEFAULT_TOLERANCE) -> List[ParagraphInfo]:
+    """
+    Extract paragraphs from a page that match a given regex pattern.
+    
+    Args:
+        regex: Regular expression pattern to search for.
+        page: PageInfo object representing the page.
+        start_vpos: Vertical position to start searching from.
+        clip: Bounding box to clip the search area.
+        tolerance: Tolerance for bbox overlap.
+        ign_pattern: Pattern to ignore.
+        
+    Returns:
+        List[ParagraphInfo]: List of paragraphs that match the regex pattern.
+    """
+    result = []
+    paragraphs = [paragraph for paragraph in page.paragraphs if contained_in_bbox(paragraph.bbox, clip, bbox_overlap=1-tolerance)] \
+                    if clip is not None else page.paragraphs
+    
+    start_index = 0
+    if start_vpos is not None:
+        vpos = page.bbox[3]
+        while vpos > start_vpos:
+            start_index += 1
+            vpos = paragraphs[start_index].bbox[3]
+    
+    for paragraph in paragraphs:
+        paragraph_text = clean_text(paragraph.text)
+        if regex.search(paragraph_text):
+            result.append(paragraph)
+    return result
+
+
+def extract_page(regex: re.Pattern, 
+                 page: PageInfo, 
+                 start_vpos: Optional[float], 
+                 ign_pattern: Optional[Pattern],
+                 clip: Optional[Tuple[float]], 
+                 tolerance: float = DEFAULT_TOLERANCE) -> Optional[PageInfo]:
+    """
+    If regex pattern in page, return page.
+
+    Args:
+        regex: Regular expression pattern to search for.
+        page: PageInfo object representing the page.
+        start_vpos: Vertical position to start searching from.
+        tolerance: Tolerance for bbox overlap.
+        clip: Bounding box to clip the search area.
+
+    Returns:
+        PageInfo: The page if the pattern is found, otherwise None.
+    """
+    start_index = get_text_index_from_vpos(start_vpos, page)
+    page_text = clean_text(page.text[start_index:])
+    if regex.search(page_text):
+        return page
+    
+# Dispatcher dictionary
+extract_dispatcher: Dict[ElementType, Callable[..., Union[List[LineInfo], List[ParagraphInfo], PageInfo]]] = {
+    ElementType.LINE: extract_lines,
+    ElementType.PARAGRAPH: extract_paragraphs,
+    ElementType.PAGE: extract_page
+}
 @log_time
 def extract_meta(doc: List[PageInfo], 
                  pattern: str, 
