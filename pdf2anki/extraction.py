@@ -486,17 +486,97 @@ def process_ltpages(doc: List[LTPage], char_margin_factor: float = 4.0, line_mar
     return pages
 
 def main():
-    pdf_path = os.getcwd() + "/examples/pathmarks_ocr.pdf"
-    params = LAParams(line_overlap=0.7, char_margin=4, line_margin=0.6)
-    doc = list(extract_pages(pdf_path, laparams=params, maxpages=80))
-    margins = (0, 20, 0, 15)
-    bbox_overlap = 0.8
-    processed_pages = process_ltpages(doc, char_margin_factor=params.char_margin, line_margin_factor=params.line_margin, margins=margins, bbox_overlap=bbox_overlap)
-    for page in processed_pages:
-        print(f"Page {page['pagenum']}")
-        for paragraph in page["paragraphs"]:
-            print(paragraph.text)
-        print("\n")
+    def parse_arguments():
+        parser = argparse.ArgumentParser(description="Process PDF and extract text information.")
+        parser.add_argument("pdf_path", type=str, help="Path to the PDF file to be processed.")
+        parser.add_argument("-o", "--out", type=str, default="processed_pages.pkl", help="Output file path for the processed pages.")
+        parser.add_argument("-sd", "--save_doc", action="store_true", help="Save the document object [list of LTPages] to a file.")
+        parser.add_argument("-d", "--doc_path", type=str, help="Path to the document object [list of LTPages] file.")
+        parser.add_argument("-gd", "--generate_doc", action="store_true", help="Process the PDF from scratch.")
+        parser.add_argument("-m", "--margins", type=float, nargs=4, default=(0, 20, 0, 15), help="Margins for clipping the page (left, top, right, bottom).")
+        parser.add_argument("-bbo", "--bbox_overlap", type=float, default=0.9, help="Bounding box overlap factor.")
+        parser.add_argument("-cm", "--char_margin", type=float, default=4, help="Character margin factor.")
+        parser.add_argument("-lm", "--line_margin", type=float, default=0.6, help="Line margin factor.")
+        parser.add_argument("-lo", "--line_overlap", type=float, default=0.6, help="Line overlap factor.")
+        parser.add_argument("-v", "--verbose", action="store_true", help="Display progress bar.")
+        parser.add_argument("--debug", action="store_true", help="Set logging level to config.DEBUG.")
+        return parser.parse_args()
+
+    args = parse_arguments()
+    config.set_debug(args.debug, args.verbose)
+    
+    params = LAParams(line_overlap=args.line_overlap, char_margin=args.char_margin, line_margin=args.line_margin)
+    
+
+    if config.DEBUG:
+        max_pages = 10
+        pdf_path = "/home/rookslog/pdf2anki/examples/pathmarks_ocr.pdf"
+        doc_path = os.path.splitext(pdf_path)[0] + f"_doc_test.pkl"
+        print(f"Debug mode is on. Processing only the first {max_pages} pages.")
+    else:
+        max_pages = 0
+        pdf_path = "/home/rookslog/pdf2anki/examples/pathmarks_ocr.pdf" if args.__dict__.get("pdf_path", None) is None else args.pdf_path
+        doc_path = os.path.splitext(pdf_path)[0] + "_doc.pkl" if args.__dict__.get("doc_path", None) is None else args.doc_path
+
+    
+    if os.path.exists(doc_path) and not args.generate_doc:
+
+        print(f"Document exists at {doc_path}. Loading...")
+        try:
+            start_time = time.time()    
+            doc = load_pages(doc_path)
+            end_time = time.time()
+            print("Loaded in {:.4f} seconds.\n".format(end_time - start_time))
+        except IOError as e:
+            logging.error(f"Error loading document: {e}")
+            print("Processing PDF...")
+            start_time = time.time()
+            doc = tuple(extract_pages(pdf_path, laparams=params, maxpages=max_pages))
+            end_time = time.time()
+            print(f"Processed {len(doc)} pages in {end_time - start_time:.4f} seconds.\n")
+        except EOFError as e:
+            logging.error(f"Error loading document: {e} \nDocument is empty.\n")
+            print("Deleting document and processing PDF...")
+            os.remove(doc_path)
+            start_time = time.time()
+            doc = tuple(extract_pages(pdf_path, laparams=params, maxpages=max_pages))
+            end_time = time.time()
+            print(f"Processed {len(doc)} pages in {end_time - start_time:.4f} seconds.\n")
+    else:
+        if args.generate_doc:
+            print(f"generate_doc flag is set. Processing PDF...")
+        else:
+            print(f"Document does not exist at {doc_path}. Processing PDF...")
+        start_time = time.time()
+        logging.info(f"extract_pages_args: {pdf_path}, {params}, {max_pages}")
+        doc = tuple(extract_pages(pdf_path, laparams=params, maxpages=max_pages))
+        end_time = time.time()
+        print(f"Processed {len(doc)} pages in {end_time - start_time:.4f} seconds.\n")
+              
+    if args.save_doc:
+        print(f"Saving document to {doc_path}...")
+        try:
+            start_time = time.time()
+            save_pages(doc, doc_path)
+            end_time = time.time()
+            print(f"Succesfully saved document in {end_time - start_time:.4f} seconds.\n")
+        except Exception as e:
+            logging.error(f"Error saving document: {e}")
+            print("Deleting empty file...")
+            os.remove(doc_path)
+            print("Deleted. Continuing...")
+
+    margins = args.margins
+    bbox_overlap = args.bbox_overlap
+
+    processed_pages = process_ltpages(doc, char_margin_factor=params.char_margin, line_margin_factor=params.line_margin, margins=margins, bbox_overlap=bbox_overlap, verbose=args.verbose)
+    print(f"Processed {len(processed_pages)} pages.")
+
+    output_file_path = os.splitext(args.pdf_path)[0] + "processed_pages.pkl" if args.__dict__.get("out", None) is None else args.out
+    print(f"Saving processed pages to {output_file_path}...")
+    with open(output_file_path, "wb") as output_file:
+        pickle.dump(processed_pages, output_file)
+    print("Done.")
 
 if __name__ == "__main__":
     main()
