@@ -229,3 +229,145 @@ def test_extract_page_info_two_fonts():
     assert page_info.font_sizes == [12.0, 14.0], "Page font sizes do not match"
     assert page_info.char_widths == [10.0, 12.0], "Page char widths do not match"
     assert page_info.colors == {'black', 'red'}, "Page colors do not match"
+def test_process_ltpages_no_type_error():
+    # Create mock PDFGraphicState
+    class MockPDFGraphicState:
+        def __init__(self):
+            pass  # Add attributes if necessary
+
+    # Initialize PDFFont with required attributes
+    font_descriptor = {"FontName": "TestFont"}
+    widths = {ord('A'): 10.0}
+    font = PDFFont(descriptor=font_descriptor, widths=widths)
+    font.fontname = "TestFont"
+
+    # Initialize PDFColorSpace
+    ncs = PDFColorSpace(name='DeviceGray', ncomponents=1)
+
+    # Create mock LTChar
+    ltchar = LTChar(
+        matrix=(1, 0, 0, 1, 0, 0),
+        font=font,
+        fontsize=10.0,
+        scaling=1.0,
+        rise=0.0,
+        text='A',
+        textwidth=1.0,
+        textdisp=0.0,
+        ncs=ncs,
+        graphicstate=MockPDFGraphicState()
+    )
+
+    # Create mock LineInfo
+    line_info = LineInfo(
+        text='A',
+        chars=[extract_char_info(ltchar)],
+        bbox=(0.0, 0.0, 10.0, 10.0),
+        font_size=10.0,
+        fonts={'TestFont'},
+        colors={'DeviceGray'},
+        char_width=10.0,
+        char_height=10.0,
+        split_end_word=False,
+        pagenum=1
+    )
+
+    # Create mock ParagraphInfo
+    paragraph_info = ParagraphInfo(
+        pagenum=1,
+        text='A',
+        lines=[line_info],
+        bbox=(0.0, 0.0, 10.0, 10.0),
+        fonts={'TestFont'},
+        colors={'DeviceGray'},
+        char_width=10.0,
+        font_size=10.0,
+        split_end_line=False,
+        is_indented=False
+    )
+
+    # Create mock PageInfo
+    page_info = PageInfo(
+        text='A',
+        bbox=(0, 0, 10, 10),
+        fonts={'TestFont'},
+        font_sizes=[12.0],
+        char_widths=[10.0],
+        colors={'DeviceGray'},
+        paragraphs=[paragraph_info],
+        split_end_paragraph=False,
+        starts_with_indent=False
+    )
+
+    # Create mock LTTextLineHorizontal
+    class MockLTTextLineHorizontal(LTTextLineHorizontal):
+        def __init__(self, bbox, objs, word_margin=0.5):
+            super().__init__(word_margin=word_margin)
+            self.set_bbox(bbox)
+            self._objs = objs
+
+        def __iter__(self):
+            return iter(self._objs)
+
+    # Create mock LTFigure
+    class MockLTFigure(LTFigure):
+        def __init__(self, matrix, bbox, objs, name="TestFigure"):
+            super().__init__(name=name, bbox=bbox, matrix=matrix)
+            self.set_bbox(bbox)
+            self._objs = objs
+
+        def __iter__(self):
+            return iter(self._objs)
+
+    # Create mock LTPage
+    class MockLTPage(LTPage):
+        def __init__(self, pageid, bbox, objs):
+            super().__init__(pageid, bbox)
+            self.set_bbox(bbox)
+            self._objs = objs
+
+        def __iter__(self):
+            return iter(self._objs)
+
+    # Create mock LTTextLineHorizontal instance
+    lt_text_line = MockLTTextLineHorizontal(
+        bbox=(0, 0, 10, 10),
+        objs=[ltchar]
+    )
+
+    # Create mock LTFigure instance
+    lt_figure = MockLTFigure(
+        matrix=(1, 0, 0, 1, 0, 0),
+        bbox=(0, 0, 10, 10),
+        objs=[lt_text_line]
+    )
+  
+    # Create mock LTPage instance
+    lt_page = MockLTPage(
+        pageid=1,
+        bbox=(0, 0, 10, 10),
+        objs=[lt_figure]
+    )
+
+    # Mock doc as list of LTPage
+    doc = [lt_page]
+
+    # Run process_ltpages
+    try:
+        processed_pages = process_ltpages(doc)
+        processed_pages[0].update_pagenum(1)
+    except TypeError as e:
+        pytest.fail(f"TypeError was raised: {e}")
+
+    # Assertions
+    assert len(processed_pages) == 1, "Processed pages count mismatch."
+    processed_page = processed_pages[0]
+    assert processed_page.text == 'A', "Page text does not match."
+    assert processed_page.bbox == (0, 0, 10, 10), "Page bbox does not match."
+    assert processed_page.fonts == {'TestFont'}, "Page fonts do not match."
+    assert processed_page.font_sizes == [10.0], "Page font sizes do not match."
+    assert processed_page.char_widths == [10.0], "Page char widths do not match."
+    assert processed_page.colors == {'DeviceGray'}, "Page colors do not match."
+    assert processed_page.paragraphs == [paragraph_info], "Page paragraphs do not match."
+    assert not processed_page.split_end_paragraph, "Page split_end_paragraph should be False."
+    assert not processed_page.starts_with_indent, "Page starts_with_indent should be False."
