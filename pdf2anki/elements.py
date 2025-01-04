@@ -1,6 +1,12 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Type, Union
+import io
+
+Primitive = Union[int, float, str, bool, None]
+FileType = Union[io.BufferedIOBase, io.BufferedReader]
+Element = Union["CharInfo", "LineInfo", "ParagraphInfo", "PageInfo"]
+
 
 class ElementType(Enum):
     CHAR = "char"
@@ -92,6 +98,7 @@ class PageInfo:
     colors: Set[str] = field(default_factory=set)
     paragraphs: List[ParagraphInfo] = field(default_factory=list)
     split_end_paragraph: bool = False
+    starts_with_indent: Optional[bool] = None
     pagenum: Optional[int] = None
 
     def get_metadata(self) -> Dict[str, Union[str, Tuple[float, float, float, float], Set[str]]]:
@@ -108,6 +115,9 @@ class PageInfo:
         if recursive:
             for paragraph in self.paragraphs:
                 paragraph.update_pagenum(pagenum, recursive=recursive)
-
-
-
+    
+@dataclass
+class FileObject:
+    path: str
+    type: Type[FileType]
+    name: str
