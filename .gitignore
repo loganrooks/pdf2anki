@@ -155,6 +155,9 @@ dmypy.json
 # pytype static type analyzer
 .pytype/
 
+#pickle files in main directory
+*.pkl
+
 # Cython debug symbols
 cython_debug/
 

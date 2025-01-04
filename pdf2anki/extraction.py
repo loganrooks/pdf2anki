@@ -13,7 +13,7 @@ from pdfminer.layout import LTPage, LAParams, LTChar, LTTextBoxHorizontal, LTTex
 from pdf2anki import config
 from pdf2anki.utils import get_averages, get_average, concat_bboxes, contained_in_bbox, get_y_overlap
 from pdf2anki.decorators import conditional_decorator, count_calls, log_time, progress_monitor
-from pdf2anki.elements import CharInfo, FileObject, LineInfo, ParagraphInfo, PageInfo, SerializableLTPage, Primitive, FileType
+from pdf2anki.elements import CharInfo, FileObject, LineInfo, ParagraphInfo, PageInfo, Primitive, FileType
 import argparse  # Import the global config.DEBUG flag
 
 
@@ -165,7 +165,7 @@ def save_pages(pages: List[LTPage], filepath: str) -> None:
     with open(filepath, "wb") as f:
         pickle.dump((serializable_pages, all_file_objs), f)
 
-def load_pages(filepath: str) -> List[SerializableLTPage]:
+def load_pages(filepath: str) -> List[LTPage]:
     with open(filepath, "rb") as f:
         pages, all_file_objs = pickle.load(f)
 
@@ -176,7 +176,7 @@ def load_pages(filepath: str) -> List[SerializableLTPage]:
         logging.getLogger().setLevel(logging.DEBUG)
 
     for page in pages:
-        assert isinstance(page, LTPage), "All elements in the list must be SerializableLTPage objects."
+        assert isinstance(page, LTPage), "All elements in the list must be LTPage objects."
         file_objs = all_file_objs[page.pageid]
         restore_file_objects(file_objs, page)
 
