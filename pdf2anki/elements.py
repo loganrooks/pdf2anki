@@ -1,12 +1,11 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Dict, List, Optional, Tuple, Type, Union, FrozenSet
 import io
 
 Primitive = Union[int, float, str, bool, None]
 FileType = Union[io.BufferedIOBase, io.BufferedReader]
 Element = Union["CharInfo", "LineInfo", "ParagraphInfo", "PageInfo"]
-
 
 class ElementType(Enum):
     CHAR = "char"
@@ -34,20 +33,32 @@ class CharInfo:
             "color": self.color
         }
 
+    def __iter__(self):
+        for key, value in asdict(self).items():
+            yield key, value
+
+    def __eq__(self, other):
+        if isinstance(other, CharInfo):
+            return asdict(self) == asdict(other)
+        return False
+
+    def __hash__(self):
+        return hash(tuple(attr for attr in self))
+
 @dataclass
 class LineInfo:
     text: str = ""
-    chars: List[CharInfo] = field(default_factory=list)
+    chars: Tuple[CharInfo] = field(default_factory=tuple)
     bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     font_size: float = 0.0
     char_height: float = 0.0
     char_width: float = 0.0
-    fonts: Set[str] = field(default_factory=set)
-    colors: Set[str] = field(default_factory=set)
+    fonts: FrozenSet[str] = field(default_factory=frozenset)
+    colors: FrozenSet[str] = field(default_factory=frozenset)
     split_end_word: bool = False
     pagenum: Optional[int] = None
 
-    def get_metadata(self) -> Dict[str, Union[str, Tuple[float, float, float, float], float, Set[str]]]:
+    def get_metadata(self) -> Dict[str, Union[str, Tuple[float, float, float, float], float, FrozenSet[str]]]:
         return {
             "bbox": self.bbox,
             "font_size": self.font_size,
@@ -60,20 +71,32 @@ class LineInfo:
     def update_pagenum(self, pagenum: int, recursive=True) -> None:
         self.pagenum = pagenum
 
+    def __iter__(self):
+        for key, value in asdict(self).items():
+            yield key, value
+
+    def __eq__(self, other):
+        if isinstance(other, LineInfo):
+            return asdict(self) == asdict(other)
+        return False
+
+    def __hash__(self):
+        return hash(attr for attr in self if not attr[0] == "chars")
+
 @dataclass
 class ParagraphInfo:
     text: str = ""
-    lines: List[LineInfo] = field(default_factory=list)
+    lines: Tuple[LineInfo] = field(default_factory=tuple)
     bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     font_size: float = 0.0
     char_width: float = 0.0
-    fonts: Set[str] = field(default_factory=set)
-    colors: Set[str] = field(default_factory=set)
+    fonts: FrozenSet[str] = field(default_factory=frozenset)
+    colors: FrozenSet[str] = field(default_factory=frozenset)
     split_end_line: bool = False
     is_indented: bool = False
     pagenum: Optional[int] = None
 
-    def get_metadata(self) -> Dict[str, Union[str, Tuple[float, float, float, float], float, Set[str]]]:
+    def get_metadata(self) -> Dict[str, Union[str, Tuple[float, float, float, float], float, FrozenSet[str]]]:
         return {
             "bbox": self.bbox,
             "font_size": self.font_size,
@@ -88,20 +111,32 @@ class ParagraphInfo:
             for line in self.lines:
                 line.pagenum = pagenum
 
+    def __iter__(self):
+        for key, value in asdict(self).items():
+            yield key, value
+
+    def __eq__(self, other):
+        if isinstance(other, ParagraphInfo):
+            return asdict(self) == asdict(other)
+        return False
+
+    def __hash__(self):
+        return hash(attr for attr in self if not attr[0] == "lines")
+
 @dataclass
 class PageInfo:
     text: str = ""
     bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
-    fonts: Set[str] = field(default_factory=set)
-    font_sizes: Set[float] = field(default_factory=set)
-    char_widths: Set[float] = field(default_factory=set)
-    colors: Set[str] = field(default_factory=set)
-    paragraphs: List[ParagraphInfo] = field(default_factory=list)
+    fonts: FrozenSet[str] = field(default_factory=frozenset)
+    font_sizes: FrozenSet[float] = field(default_factory=frozenset)
+    char_widths: FrozenSet[float] = field(default_factory=frozenset)
+    colors: FrozenSet[str] = field(default_factory=frozenset)
+    paragraphs: Tuple[ParagraphInfo] = field(default_factory=tuple)
     split_end_paragraph: bool = False
     starts_with_indent: Optional[bool] = None
     pagenum: Optional[int] = None
 
-    def get_metadata(self) -> Dict[str, Union[str, Tuple[float, float, float, float], Set[str]]]:
+    def get_metadata(self) -> Dict[str, Union[str, Tuple[float, float, float, float], FrozenSet[str]]]:
         return {
             "bbox": self.bbox,
             "fonts": self.fonts,
@@ -115,8 +150,20 @@ class PageInfo:
         if recursive:
             for paragraph in self.paragraphs:
                 paragraph.update_pagenum(pagenum, recursive=recursive)
-    
-@dataclass
+
+    def __iter__(self):
+        for key, value in asdict(self).items():
+            yield key, value
+
+    def __eq__(self, other):
+        if isinstance(other, PageInfo):
+            return asdict(self) == asdict(other)
+        return False
+
+    def __hash__(self):
+        return hash(attr for attr in self if not attr[0] == "paragraphs")
+
+@dataclass(frozen=True)
 class FileObject:
     path: str
     type: Type[FileType]
