@@ -1,7 +1,10 @@
+from copy import copy
 from enum import Enum
 import hashlib
 import json
+import logging
 import os
+import pickle
 from pdf2anki.utils import clean_text, contained_in_bbox, get_text_index_from_vpos
 from pdf2anki.decorators import log_time
 from typing import Callable, List, Literal, Optional, Set, Tuple, Pattern, Union, overload
@@ -14,6 +17,7 @@ from dataclasses import dataclass
 from typing import Optional, List, Dict, Iterator, Tuple
 from collections import defaultdict
 from pdf2anki.config import DEBUG
+import argparse
 
 DEFAULT_TOLERANCE = 1e-2
 
@@ -139,6 +143,9 @@ class Recipe:
             text_filter_ids = set([self._generate_filter_id(text_filter) for text_filter in text_filters])
             self.toc_to_text_map[toc_filter_id] = text_filter_ids
 
+    def __repr__(self):
+        return f"Recipe(toc_filters={self.toc_filters},\n\t text_filters={self.text_filters},\n\t toc_to_text_map={self.toc_to_text_map})"
+
     @staticmethod
     def generate_filter_id(filter_obj) -> str:
         """Generate a SHA256 hash for a filter object based on its attributes."""
@@ -183,10 +190,10 @@ class Recipe:
         text_filter_ids = self.toc_to_text_map.get(toc_filter_id, [])
         return [self.text_filters[text_filter_id] for text_filter_id in text_filter_ids]
     
-    def _generate_filter_id(filter_obj) -> str:
+    def _generate_filter_id(self, filter_obj) -> str:
         """Generate a SHA256 hash for a filter object based on its attributes."""
-        filter_json = json.dumps(filter_obj.__dict__, sort_keys=True)
-        return hashlib.sha256(filter_json.encode('utf-8')).hexdigest()
+    # Generate a SHA256 hash from the JSON string
+        return hash(filter_obj)
 
     def add_toc_filter(self, toc_filter: ToCFilter, text_filters: Optional[List[TextFilter]] = None):
         """
