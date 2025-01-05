@@ -344,9 +344,9 @@ def search_in_page(regex: re.Pattern,
 
 def extract_lines(regex: re.Pattern, 
                   page: PageInfo, 
-                  start_vpos: Optional[float], 
-                  ign_pattern: Optional[Pattern],
-                  clip: Optional[Tuple[float]], 
+                  start_vpos: Optional[float] = None, 
+                  ign_pattern: Optional[Pattern] = None,
+                  clip: Optional[Tuple[float]] = None, 
                   tolerance: float = DEFAULT_TOLERANCE) -> List[LineInfo]:
     result = []
     page_lines = [line for paragraph in page.paragraphs for line in paragraph.lines if contained_in_bbox(line.bbox, clip, bbox_overlap=1-tolerance)] \
@@ -367,9 +367,9 @@ def extract_lines(regex: re.Pattern,
 
 def extract_paragraphs(regex: re.Pattern, 
                        page: PageInfo, 
-                       start_vpos: Optional[float], 
-                       ign_pattern: Optional[Pattern],
-                       clip: Optional[Tuple[float]], 
+                       start_vpos: Optional[float] = None, 
+                       ign_pattern: Optional[Pattern] = None,
+                       clip: Optional[Tuple[float]] = None, 
                        tolerance: float = DEFAULT_TOLERANCE) -> List[ParagraphInfo]:
     """
     Extract paragraphs from a page that match a given regex pattern.
@@ -405,9 +405,9 @@ def extract_paragraphs(regex: re.Pattern,
 
 def extract_page(regex: re.Pattern, 
                  page: PageInfo, 
-                 start_vpos: Optional[float], 
-                 ign_pattern: Optional[Pattern],
-                 clip: Optional[Tuple[float]], 
+                 start_vpos: Optional[float] = None, 
+                 ign_pattern: Optional[Pattern] = None,
+                 clip: Optional[Tuple[float]] = None, 
                  tolerance: float = DEFAULT_TOLERANCE) -> Optional[PageInfo]:
     """
     If regex pattern in page, return page.
@@ -422,6 +422,8 @@ def extract_page(regex: re.Pattern,
     Returns:
         PageInfo: The page if the pattern is found, otherwise None.
     """
+    if start_vpos is None:
+        start_vpos = clip[1] if clip is not None else page.bbox[3]
     start_index = get_text_index_from_vpos(start_vpos, page)
     page_text = clean_text(page.text[start_index:])
     if regex.search(page_text):
@@ -437,9 +439,9 @@ extract_dispatcher: Dict[ElementType, Callable[..., Union[List[LineInfo], List[P
 @log_time
 def search_in_page(regex: re.Pattern, 
                    page: PageInfo, 
-                   start_vpos: Optional[float], 
-                   ign_pattern: Optional[Pattern],
-                   clip: Optional[Tuple[float]], 
+                   start_vpos: Optional[float] = None, 
+                   ign_pattern: Optional[Pattern] = None,
+                   clip: Optional[Tuple[float]] = None, 
                    tolerance: float = DEFAULT_TOLERANCE,
                    element_type: ElementType = ElementType.LINE) -> Union[List[LineInfo], List[ParagraphInfo], PageInfo]:
 
@@ -460,13 +462,13 @@ def search_in_page(regex: re.Pattern,
         Union[List[LineInfo], List[ParagraphInfo], List[LTFigure]]: A list of matching elements.
     """
     extract_function = extract_dispatcher[element_type]
-    return extract_function(regex, page, start_vpos, clip, ign_pattern)
+    return extract_function(regex, page, start_vpos, clip=clip, ign_pattern=ign_pattern, tolerance=tolerance)
 
 @log_time
 def extract_elements(doc: List[PageInfo], 
                  pattern: str, 
                  page_numbers: Optional[List[int]] = None,
-                 ign_case: bool = False, 
+                 ign_case: bool = True, 
                  ign_pattern: Optional[Pattern] = None,
                  tolerance: float = DEFAULT_TOLERANCE,
                  clip: Optional[Tuple[float]] = None,
@@ -477,10 +479,10 @@ def extract_elements(doc: List[PageInfo],
     if page_numbers is None:
         pages = enumerate(doc, start=1)
     else:
-        pages = [(pagenum, doc[pagenum - 1]) for pagenum in page_numbers]
+        pages = [(pagenum, doc[pagenum-1]) for pagenum in page_numbers]
 
     for pagenum, page in pages:
-        elements = [element for element in search_in_page(regex, pagenum, page, ign_pattern=ign_pattern, clip=clip, tolerance=tolerance, element_type=element_type) if isinstance(element, Union[LineInfo, ParagraphInfo, PageInfo])]
+        elements = [element for element in search_in_page(regex, page, ign_pattern=ign_pattern, clip=clip, tolerance=tolerance, element_type=element_type) if isinstance(element, Union[LineInfo, ParagraphInfo, PageInfo])]
         [element.update_pagenum(pagenum, recursive=True) for element in elements]
         all_elements.extend(elements)
     return all_elements
