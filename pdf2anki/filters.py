@@ -6,14 +6,14 @@ used to test if a span should be included in the ToC.
 import re
 from typing import Dict, Optional, Set, Tuple, Union, List, overload, override
 from pdf2anki.elements import ParagraphInfo, LineInfo
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from multipledispatch import dispatch
 
 from pdf2anki.utils import contained_in_bbox, get_average, is_valid_arg
 
 DEF_TOLERANCE: dict = {"font": 1e-1, "bbox": 1e-1, "text": 1e-1}
 
-@dataclass
+@dataclass(frozen=True)
 class ToCEntry:
     level: int
     title: str
@@ -29,7 +29,7 @@ class ToCEntry:
     def __repr__(self):
         return f"ToCEntry(level={self.level}, title={self.title}, page={self.page_range}, vpos={self.vpos}, bbox={self.bbox}, text={self.text})"
 
-@dataclass
+@dataclass(frozen=True)
 class FontFilterOptions:
     """Options for configuring the FontFilter."""
     check_names: bool = True
@@ -43,17 +43,17 @@ class FontFilterOptions:
     ign_mask: int = 0
     ign_pattern: Optional[re.Pattern] = None
 
-@dataclass
+@dataclass(frozen=True)
 class FontFilterVars:
     """Variables for the FontFilter."""
-    names: Optional[Set[str]] = None
-    colors: Optional[Set[str]] = None
+    names: Optional[frozenset[str]] = None
+    colors: Optional[frozenset[str]] = None
     font_size: Optional[float] = None
     char_width: Optional[float] = None
     is_upper: Optional[bool] = None
    
 
-@dataclass
+@dataclass(frozen=True)
 class BoundingBoxFilterOptions:
     """Options for configuring the BoundingBoxFilter."""
     check_left: bool = True
@@ -63,7 +63,7 @@ class BoundingBoxFilterOptions:
     require_equality: bool = False
     tolerance: float = DEF_TOLERANCE["bbox"]
 
-@dataclass
+@dataclass(frozen=True)
 class BoundingBoxFilterVars:
     """Variables for the BoundingBoxFilter."""
     left: Optional[float] = None
@@ -281,6 +281,9 @@ class FontFilter:
             return False
         return True
     
+    def __hash__(self):
+        return hash((self.vars, self.opts))
+    
     def __repr__(self):
         return (f"FontFilter(vars={self.vars}, opts={self.opts})")
 
@@ -296,6 +299,9 @@ class BoundingBoxFilter:
         """
         self.vars = vars
         self.opts = opts
+    
+    def __repr__(self):
+        return (f"BoundingBoxFilter(vars={self.vars}, opts={self.opts})")
 
     @overload
     @classmethod
@@ -490,11 +496,14 @@ class BoundingBoxFilter:
             return False
         return True
 
+    def __hash__(self):
+        return hash((self.vars, self.opts))
+    
     def __repr__(self):
         return (f"BoundingBoxFilter(vars={self.vars}, opts={self.opts})")
     
 
-@dataclass
+@dataclass(frozen=True)
 class TextFilterOptions:
     """Options for configuring the TextFilter."""
     check_font: bool = True
@@ -502,7 +511,7 @@ class TextFilterOptions:
     check_header: bool = False
     tolerance: float = DEF_TOLERANCE["text"]
 
-@dataclass
+@dataclass(frozen=True)
 class TextFilterVars:
     """Variables for the TextFilter."""
     font: FontFilter
@@ -520,6 +529,17 @@ class TextFilter:
         """
         self.vars = vars
         self.opts = opts
+
+    def __repr__(self):
+        return (f"TextFilter(vars={self.vars}, opts={self.opts})")
+
+    def __hash__(self):
+        return hash((self.vars, self.opts))
+
+    def __eq__(self, other):
+        if isinstance(other, TextFilter):
+            return self.vars == other.vars and self.opts == other.opts
+        return False
 
     @overload
     @classmethod
@@ -557,12 +577,12 @@ class TextFilter:
         if opts is None:
             opts = TextFilterOptions(check_bbox=False)
 
-        elif is_valid_arg(opts, Dict[str, Union[bool, float, Optional[re.Pattern]]]):
+        elif is_valid_arg(opts, Dict[str, Optional[Union[bool, float, re.Pattern]]]):
             font_opts = opts.get('font', None)
             bbox_opts = opts.get('bbox', None)
             opts = TextFilterOptions(**opts.get('text', {"check_bbox": False}))
 
-        elif is_valid_arg(opts, Dict[str, Union[bool, float, FontFilterOptions, BoundingBoxFilterOptions]]):
+        elif is_valid_arg(opts, Dict[str, Optional[Union[bool, float, FontFilterOptions, BoundingBoxFilterOptions]]]):
             font_opts = opts.get('font', None)
             bbox_opts = opts.get('bbox', None)
             opts = TextFilterOptions(
@@ -571,7 +591,11 @@ class TextFilter:
                 check_header=opts.get('check_header', False),
                 tolerance=opts.get('tolerance', DEF_TOLERANCE["text"])
             )
-        assert isinstance(opts, TextFilterOptions)
+        elif is_valid_arg(opts, Dict[str, Union[FontFilterOptions, TextFilterOptions, BoundingBoxFilterOptions]]):
+            font_opts = opts.get('font', None)
+            bbox_opts = opts.get('bbox', None)
+            opts = opts.get('text', None)
+
         assert isinstance(font_opts, FontFilterOptions) or font_opts is None
         assert isinstance(bbox_opts, BoundingBoxFilterOptions) or bbox_opts is None
         assert isinstance(header, ToCEntry) or header is None
@@ -664,14 +688,14 @@ class TextFilter:
         return (f"TextFilter(vars={self.vars}, opts={self.opts})")
     
 
-@dataclass
+@dataclass(frozen=True)
 class ToCFilterOptions:
     """Options for configuring the ToCFilter."""
     check_font: bool = True
     check_bbox: bool = True
     greedy: bool = False
 
-@dataclass
+@dataclass(frozen=True)
 class ToCFilterVars:
     """Variables for the ToCFilter."""
     level: int
@@ -689,6 +713,14 @@ class ToCFilter:
         """
         self.vars = vars
         self.opts = opts
+
+    def __hash__(self):
+        return hash((self.vars, self.opts))
+
+    def __eq__(self, other):
+        if isinstance(other, ToCFilter):
+            return self.vars == other.vars and self.opts == other.opts
+        return False
 
     @classmethod
     def from_paragraph_info(cls, paragraph_info: ParagraphInfo, 
@@ -780,7 +812,7 @@ class ToCFilter:
             bbox_opts = BoundingBoxFilterOptions(**opts.get('bbox', {}))
             opts = ToCFilterOptions(**opts.get('toc', {}))
         
-        elif is_valid_arg(opts, Dict[str, Union[ToCFilterOptions, FontFilterOptions, BoundingBoxFilterOptions]]):
+        elif is_valid_arg(opts, Dict[str, Optional[Union[ToCFilterOptions, FontFilterOptions, BoundingBoxFilterOptions]]]):
             font_opts = opts.get('font', FontFilterOptions())
             bbox_opts = opts.get('bbox', BoundingBoxFilterOptions())
             opts = opts.get('toc', ToCFilterOptions())
@@ -850,6 +882,9 @@ class ToCFilter:
             return False
         return True
 
+    def __hash__(self):
+        return hash((self.vars, self.opts))
+    
     def __repr__(self):
         return (f"ToCFilter(vars={self.vars}, opts={self.opts})")
 
