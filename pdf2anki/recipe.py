@@ -486,69 +486,85 @@ def extract_elements(doc: List[PageInfo],
         [element.update_pagenum(pagenum, recursive=True) for element in elements]
         all_elements.extend(elements)
     return all_elements
+
+@log_time
 def generate_recipe(doc: List[PageInfo], 
-                    headers: List[Tuple[str, int, int]], 
+                    headers: List[Dict[str, Union[Tuple[int, str], List[Tuple[int, str]], int]]], 
                     page_numbers: List[int] = None,
                     tolerances: dict = {"font": 1e-1, "bbox": 1e-1}, 
                     ign_pattern=None, 
-                    char_margin_factor: float = 0.5, 
-                    clip: Optional[Tuple[float]] = None) -> Recipe:
-    recipe_dict = {"heading": []}
+                    ign_case=True,
+                    clip: Optional[Tuple[float]] = None,
+                    include_text_filters: bool = False,
+                    toc_filter_options: Optional[List[Dict[str, Union[ToCFilterOptions, FontFilterOptions, BoundingBoxFilterOptions]]]] = None,
+                    text_filter_options: Optional[List[Dict[str, Union[TextFilterOptions, FontFilterOptions, BoundingBoxFilterOptions]]]] = None) -> Recipe:
+    header_filters: List[ToCFilter] = []
+    all_text_filters: List[List[TextFilter]] = []
 
-    for header, level, pagenum in headers:
+
+    if toc_filter_options is None:
+        toc_filter_options = [{} for _ in headers]
+    
+    if text_filter_options is None:
+        text_filter_options = [{} for _ in headers]
+
+    for i, header in enumerate(headers):
+        header_text, header_level = header["header"], header["level"]
+        header_page_num, header_str = header_text
+
         # Extract metadata for the header
-        # Really shitty code here sorry
-        page_index = page_numbers.index(pagenum-1) if page_numbers else pagenum - 1
-        page = doc[page_index]
-        meta = extract_meta([page], header,
-                            [page_numbers[page_index]] if page_numbers is not None else None, 
-                            ign_case=True, ign_pattern=ign_pattern, 
-                            char_margin_factor=char_margin_factor, clip=clip)
-        if len(meta) > 1:
-            meta.sort(key=lambda x: x["char_width"])
-        line = meta[-1]
-        font_filter = {
-            "name": line["font"],
-            "size": line["size"], 
-            "size_tolerance": tolerances["font"],
-            "color": line["color"],
-            "char_width": line["char_width"],
-            "is_upper": line["is_upper"]
+        page_index = page_numbers.index(header_page_num - 1) if page_numbers else header_page_num - 1
+        # page = doc[page_index]
+        header_elements = [header_element for header_element in \
+                            extract_elements(doc, header_str, [header_page_num], ign_case=ign_case, \
+                                                ign_pattern=ign_pattern, tolerance=tolerances["bbox"], clip=clip, element_type=ElementType.LINE)\
+                                if isinstance(header_element, LineInfo)]
+
+        if len(header_elements) > 1:
+            header_elements.sort(key=lambda x: x.char_width)
+        line = header_elements[-1] if len(header_elements) > 0 else None
+
+        if line is None:
+            logging.warning(f"No header found for {header_str} on page {header_page_num}.")
+            continue
+        
+        fltr_dict = {
+            "toc": toc_filter_options[i].get("toc", ToCFilterOptions()),
+            "font": toc_filter_options[i].get("font", FontFilterOptions()),
+            "bbox": toc_filter_options[i].get("bbox", BoundingBoxFilterOptions())
         }
-        if level == 1:
-            bbox_filter = {
-                "left": line["bbox"][0],
-                "top": line["bbox"][1],
-                "right": line["bbox"][2],
-                "bottom": line["bbox"][3],
-                "tolerance": tolerances["bbox"]
-            }
-        else:
-            bbox_filter = {}
 
-        recipe_dict["heading"].append({
-            "level": level,
-            "font": font_filter,
-            "bbox": bbox_filter,
-            "greedy": False
-        })
-    recipe = Recipe(recipe_dict)
-    return recipe
+        toc_filter = ToCFilter.from_line_info(line, header_level, fltr_dict)
+        header_filters.append(toc_filter)
 
-@log_time
-def extract_toc(doc: List[PageInfo], recipe: Recipe, page_range=None):
-    toc_entries = []
-    if page_range is None:
-        page_range = [0, len(doc) - 1]
+        if include_text_filters:
+            text_filters: List[TextFilter] = []
+            for (text_page_num, text_str) in header["text"]:
+                page_index = page_numbers.index(text_page_num - 1) if page_numbers else text_page_num - 1
+                # page = doc[page_index] 
 
-    for page_num in range(page_range[0]-1, page_range[1]):
-        page = doc[page_num]
-        for element in page:
-            if isinstance(element, (LTTextBoxHorizontal, LTTextLineHorizontal, LTFigure)):
-                toc_entries.extend(recipe.extract_paragraph(element, page_num))
+                text_elements = set([text_element for text_element in \
+                                 extract_elements(doc, text_str, [text_page_num],
+                                                    ign_pattern=ign_pattern, tolerance=tolerances["bbox"], clip=clip, element_type=ElementType.PARAGRAPH) \
+                                        if isinstance(text_element, ParagraphInfo)])
+                
+                if len(text_elements) > 1:
+                    logging.warning(f"Multiple text elements found for header {header_str} on page {text_page_num}. Using the first element.")
 
-    toc_entries = merge_toc_entries(toc_entries)
-    return toc_entries
+                for text_element in text_elements:
+                    assert isinstance(text_element, ParagraphInfo)
+                    opts = {"text": text_filter_options[i].get("text", TextFilterOptions()),
+                            "font": text_filter_options[i].get("font", FontFilterOptions()),
+                            "bbox": text_filter_options[i].get("bbox", BoundingBoxFilterOptions())}
+                    text_filter = TextFilter.from_paragraph_info(text_element, opts)
+                    text_filters.append(text_filter)
+            all_text_filters.append(text_filters)
+
+    recipe_dict = {
+        "heading": header_filters,
+        "text": all_text_filters if include_text_filters else []
+    }
+    return Recipe(recipe_dict)
 
 @log_time
 def merge_toc_entries(toc_entries, tolerance=10):
