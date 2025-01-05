@@ -254,7 +254,7 @@ def extract_line_info(line: List[CharInfo], interrupt_chars: str = "-") -> LineI
     line_text = "".join(char.text for char in line)
 
     return LineInfo(
-        text=line_text,
+        text=clean_text(line_text),
         chars=tuple(line),
         bbox=concat_bboxes([char.bbox for char in line]),
         font_size=get_average([char.size for char in line]),
@@ -333,7 +333,7 @@ def extract_lines_from_text_elements(text_elements: List[CharInfo], char_margin_
             current_line.append(element)
             last_element = element
         else:
-            y_overlap = abs(get_y_overlap(element.bbox, last_element.bbox))
+            y_overlap = get_y_overlap(element.bbox, last_element.bbox) # negative if there is a gap
             x_gap = abs(last_element.bbox[2] - element.bbox[0])
 
             if y_overlap >= min_overlap and x_gap <= char_margin:
@@ -419,6 +419,100 @@ def is_header_continuation(line_a: LineInfo, line_b: LineInfo, tolerance_factors
     similar_font_size = abs(line_b.font_size - header_font_size) <= header_font_size*tolerance_factors[1]
     return line_b_centered and similar_font_size
 
+
+           
+
+# get headers and pagenumber indices, remove them, then go through each paragraph, split by line breaks, check each line break
+# split by line breaks concat them all and check for hyphenated words, and then we merge paragraphs.
+
+def is_ignored(paragraph, ignore_patterns: list[str]):
+    for pattern in ignore_patterns:
+        if re.search(pattern, paragraph):
+            return True
+    return False
+
+def remove_line_breaks(lines: list[LineInfo]) -> str:
+    merged_lines = ""
+    for line in lines[:-1]:
+        merged_lines += line.text.rstrip()[:-1] if line.split_end_word else line.text
+    return merged_lines + lines[-1].text
+
+def is_complete_sentence(text: str):
+    # Define regex patterns for various sentence-ending formats
+    sentence_end_patterns = [
+        r'[.!?][\"\')\]]*\s*\(\d+\)$',  # Ends with punctuation followed by optional quotes, parentheses, or brackets and a citation
+        r'[.!?][\"\')\]]*\s*\[\d+\]$',  # Ends with punctuation followed by optional quotes, parentheses, or brackets and a footnote
+        r'[.!?][\"\')\]]*\s*$'  # Ends with punctuation followed by optional quotes, parentheses, or brackets and space
+    ]
+
+    sentence_end_pattern = r'|'.join(sentence_end_patterns)
+
+    # Check if the text matches any of the sentence-ending pattern
+    
+    return bool(re.search(sentence_end_pattern, text))
+
+def extract_paragraph_text(lines: tuple[LineInfo]) -> str:
+    paragraph_text = remove_line_breaks(lines)
+    paragraph_text += "\n" if paragraph_text.rstrip()[-1]==":" else ""
+    return paragraph_text
+
+def clean_text(text: str, ignore_patterns: Optional[list[re.Pattern]] = None) -> str:
+    if ignore_patterns is not None:
+        regex: re.Pattern =  r'|'.join(ignore_patterns)
+        text = re.sub(regex, '', text)
+    return ' '.join(text.split('  ')).replace('“', '"').replace('”', '"').replace("’", "'").lstrip()
+
+def clean_paragraphs(paragraphs: list[str], ignore_patterns=[r'^\d+$', r'^\x0c']):
+    cleaned_paragraphs = []
+    previous_paragraph_incomplete = False
+    for paragraph in paragraphs:
+        if not is_ignored(paragraph, ignore_patterns):
+            lines = paragraph.splitlines()
+            merged_paragraph = remove_line_breaks(lines)
+            if previous_paragraph_incomplete:
+                cleaned_paragraphs[-1] += (merged_paragraph)
+            else:
+                cleaned_paragraphs.append(merged_paragraph)
+            previous_paragraph_incomplete = not is_complete_sentence(lines[-1])
+    return cleaned_paragraphs
+
+def merge_split_paragraphs(paragraphs: list[ParagraphInfo]) -> list[ParagraphInfo]:
+    merged_paragraphs = []
+    previous_paragraph_incomplete = False
+    for current_paragraph in paragraphs:
+        if previous_paragraph_incomplete:
+            merged_paragraphs[-1] = merge_paragraphs([merged_paragraphs[-1], current_paragraph])
+        else:
+            merged_paragraphs.append(current_paragraph)
+        previous_paragraph_incomplete = current_paragraph.split_end_line
+    return merged_paragraphs
+
+
+def merge_paragraphs(paragraphs: List[ParagraphInfo], tolerance: float = 1e-1) -> ParagraphInfo:
+    """
+    Merge together a set of paragraphs.
+    
+    Args:
+        paragraphs (list): A list of ParagraphInfo elements to merge.
+        tolerance (float): Tolerance for averaging values.
+
+    Returns:
+        ParagraphInfo: A ParagraphInfo dataclass with the merged information.
+    """
+    lines = tuple(line for paragraph in paragraphs for line in paragraph.lines)
+    merged_text = extract_paragraph_text(lines)
+    return ParagraphInfo(
+        text=merged_text,
+        lines=lines,
+        bbox=concat_bboxes([paragraph.bbox for paragraph in paragraphs]),
+        colors=frozenset(color for paragraph in paragraphs for color in paragraph.colors),
+        fonts=frozenset(font for paragraph in paragraphs for font in paragraph.fonts),
+        font_size=get_average([paragraph.font_size for paragraph in paragraphs]),
+        char_width=get_average([paragraph.char_width for paragraph in paragraphs]),
+        split_end_line=paragraphs[-1].split_end_line,
+        is_indented=paragraphs[0].is_indented
+    )
+
 def extract_paragraph_info(paragraph: List[LineInfo], pagenum: Optional[int] = None, indent_factor: float = 3.0) -> ParagraphInfo:
     """
     Extract information from a list of LineInfo elements that form a paragraph.
@@ -429,7 +523,7 @@ def extract_paragraph_info(paragraph: List[LineInfo], pagenum: Optional[int] = N
     Returns:
         ParagraphInfo: A ParagraphInfo dataclass with information about the paragraph.
     """
-    paragraph_text = "".join(line.text for line in paragraph)
+    paragraph_text = extract_paragraph_text(paragraph)
     return ParagraphInfo(
         pagenum=pagenum,
         text=paragraph_text,
@@ -439,9 +533,10 @@ def extract_paragraph_info(paragraph: List[LineInfo], pagenum: Optional[int] = N
         colors=frozenset(color for line in paragraph for color in line.colors),
         char_width=get_average([line.char_width for line in paragraph]),
         font_size=get_average([line.font_size for line in paragraph]),
-        split_end_line=paragraph[-1].split_end_word,
+        split_end_line=paragraph[-1].split_end_word or not is_complete_sentence(paragraph[-1].text),
         is_indented=is_indented(paragraph[1], paragraph[0], indent_factor=indent_factor) if len(paragraph) > 1 else False
     )
+
 
 def extract_page_info(page: List[ParagraphInfo], tolerance: float = 1e-1) -> PageInfo:
     """
@@ -517,9 +612,9 @@ def process_ltpages(doc: List[LTPage], char_margin_factor: float = 4.0, line_mar
 
         paragraphs = extract_paragraphs_from_page(page, pagenum=page_num, char_margin_factor=char_margin_factor, line_margin_factor=line_margin_factor, clip=clip, bbox_overlap=bbox_overlap)
         if paragraphs is None:
-            pages.append(PageInfo(text="", bbox=page.bbox, paragraphs=[], font_sizes=[], char_widths=[], colors=set(), starts_with_indent=False, split_end_paragraph=False))
-            continue
-        page_info = extract_page_info(paragraphs)
+            page_info = PageInfo(text="", bbox=page.bbox, paragraphs=[], font_sizes=[], char_widths=[], colors=set(), starts_with_indent=False, split_end_paragraph=False)
+        else:
+            page_info = extract_page_info(paragraphs)
         page_info.update_pagenum(page_num, recursive=True)
         pages.append(page_info)
     return pages
