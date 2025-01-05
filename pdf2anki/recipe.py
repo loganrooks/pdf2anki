@@ -608,13 +608,63 @@ def nest_toc_entries(flat_toc):
     return nest_entries(flat_toc, flat_toc[0].level)
 
 def main():   
-    pdf_path = os.get(__file__) + "/examples/pathmarks_ocr.pdf"
-    params = LAParams(line_margin=0.5, char_margin=2.0, line_overlap=0.5)
-    page_range = [16, 60]
-    text_doc = list(extract_pages(pdf_path, laparams=params, maxpages=page_range[1]))
-    # recipe = generate_recipe(text_doc, [("Table of Contents", 1, 16)], page_numbers=range(16, 60))
+    def parse_args():
+        parser = argparse.ArgumentParser(description="Generate a recipe from a PDF document.")
+        parser.add_argument("--pdf_path", type=str, help="Path to the PDF file.")
+        parser.add_argument("--processed_pages_path", type=str, default=None, help="Path to the processed pages pickle file.")
+        parser.add_argument("--recipe_config", type=str, default=None, help="Path to the JSON file containing headers and options.")
+        parser.add_argument("--page_numbers", type=str, default=None, help="Comma-separated list of page numbers to include.")
+        parser.add_argument("--tolerances", type=str, default='{"font": 1e-1, "bbox": 1e-1}', help="JSON string of tolerances for font and bbox.")
+        parser.add_argument("--ign_pattern", type=str, default=None, help="Regex pattern to ignore.")
+        parser.add_argument("--clip", type=str, default=None, help="Bounding box to clip the search area.")
+        parser.add_argument("--include_text_filters", action='store_true', help="Include text filters in the recipe.")
+        return parser.parse_args()
+
+    args = parse_args()
+    pdf_path = "/home/rookslog/pdf2anki/examples/pathmarks_ocr.pdf"
+    processed_pages_path = os.path.splitext(pdf_path)[0] + "_processed_pages.pkl"
+    with open(processed_pages_path, "rb") as f:
+        doc = pickle.load(f)
+
+    headers = [
+        {"header": (54, "Phenomenology and Theology"), "level": 1, "text": [(55, "The popular understanding of the relationship between theology and")]},
+        {"header": (58, "THE POSITIVE CHARACTER OF THEOLOGY"), "level": 2, "text": [(58, "A positive science is the founding disclosure of a being that is given")]},
+        {"header": (112, "ON THE ESSENCE OF GROUND"), "level": 1, "text": [(113, "but was concerned with understanding their interconnection")]},
+        {"header": (122, "TRANSCENDENCE AS THE DOMAIN OF THE"), "level": 2, "text": [(122, "A preliminary remark on terminology must guide our use of")]}
+    ]
+    ign_pattern = re.compile(r'^[a-z]\)')
+
+    tolerances = {"font": 3e-1, "bbox": 1e-1, "text": 5e-1}
+
+    toc_filter_options: list[dict] = []
+    text_filter_options: list[dict] = []
+
+    for header in headers:
+        toc_filter_option = {
+            "toc": ToCFilterOptions(check_bbox=False), 
+            "font": FontFilterOptions(check_colors=False, check_width=False, check_is_upper=header["level"] == 2, size_tolerance=tolerances["font"]),
+            "bbox": None}
+        toc_filter_options.append(toc_filter_option)
+
+        if args.include_text_filters or True:
+            text_filter_option = {
+                "text": TextFilterOptions(check_bbox=False, tolerance=tolerances["text"]),
+                "font": FontFilterOptions(check_colors=False, check_is_upper=False, size_tolerance=tolerances["font"]),
+                "bbox": BoundingBoxFilterOptions(tolerance=tolerances["bbox"])}
+            text_filter_options.append(text_filter_option)
+
+    
+    recipe = generate_recipe(doc, headers, 
+                             page_numbers=None, 
+                             tolerances={"font": 1e-1, "bbox": 1e-1}, 
+                             ign_pattern=ign_pattern, clip=None, 
+                             include_text_filters=True,
+                             toc_filter_options=toc_filter_options,
+                             text_filter_options=text_filter_options)
     # toc_entries = extract_toc(text_doc, recipe, page_range=page_range)
     # merged_toc_entries = merge_toc_entries(toc_entries, tolerance=30)
+
+    print(recipe)
 
 if __name__ == "__main__":
     main()
