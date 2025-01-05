@@ -286,7 +286,7 @@ def test_process_ltpages_no_type_error():
         colors=frozenset({'DeviceGray'}),
         char_width=10.0,
         font_size=10.0,
-        split_end_line=False,
+        split_end_line=True,
         is_indented=False
     )
 
@@ -299,7 +299,7 @@ def test_process_ltpages_no_type_error():
         char_widths=frozenset([10.0]),
         colors=frozenset({'DeviceGray'}),
         paragraphs=(paragraph_info,),
-        split_end_paragraph=False,
+        split_end_paragraph=True,
         starts_with_indent=False
     )
 
@@ -373,7 +373,7 @@ def test_process_ltpages_no_type_error():
     assert processed_page.char_widths == frozenset([10.0]), "Page char widths do not match."
     assert processed_page.colors == frozenset({'DeviceGray'}), "Page colors do not match."
     assert processed_page.paragraphs == (paragraph_info,), "Page paragraphs do not match."
-    assert not processed_page.split_end_paragraph, "Page split_end_paragraph should be False."
+    assert processed_page.split_end_paragraph, "Page split_end_paragraph should be True."
     assert not processed_page.starts_with_indent, "Page starts_with_indent should be False."
 
 class MockLTContainer(LTContainer):
