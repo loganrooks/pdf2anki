@@ -255,11 +255,11 @@ def extract_line_info(line: List[CharInfo], interrupt_chars: str = "-") -> LineI
 
     return LineInfo(
         text=line_text,
-        chars=line,
+        chars=tuple(line),
         bbox=concat_bboxes([char.bbox for char in line]),
         font_size=get_average([char.size for char in line]),
-        fonts=set([char.font for char in line]),
-        colors=set([char.color for char in line]),
+        fonts=frozenset(char.font for char in line),
+        colors=frozenset(char.color for char in line),
         char_width=get_average([char.width for char in line]),
         char_height=get_average([char.height for char in line]),
         split_end_word=line_text.rstrip().endswith(interrupt_chars) and not line_text.rstrip().removesuffix(interrupt_chars)[-1].isspace(),
@@ -433,10 +433,10 @@ def extract_paragraph_info(paragraph: List[LineInfo], pagenum: Optional[int] = N
     return ParagraphInfo(
         pagenum=pagenum,
         text=paragraph_text,
-        lines=paragraph,
+        lines=tuple(paragraph),
         bbox=concat_bboxes([line.bbox for line in paragraph]),
-        fonts=set(font for line in paragraph for font in line.fonts),
-        colors=set(color for line in paragraph for color in line.colors),
+        fonts=frozenset(font for line in paragraph for font in line.fonts),
+        colors=frozenset(color for line in paragraph for color in line.colors),
         char_width=get_average([line.char_width for line in paragraph]),
         font_size=get_average([line.font_size for line in paragraph]),
         split_end_line=paragraph[-1].split_end_word,
@@ -457,11 +457,11 @@ def extract_page_info(page: List[ParagraphInfo], tolerance: float = 1e-1) -> Pag
     return PageInfo(
         text=page_text,
         bbox=concat_bboxes([paragraph.bbox for paragraph in page]),
-        fonts=set(font for paragraph in page for font in paragraph.fonts),
-        font_sizes=get_averages([paragraph.font_size for paragraph in page], tolerance=tolerance),
-        char_widths=get_averages([paragraph.char_width for paragraph in page], tolerance=tolerance),
-        colors=set(color for paragraph in page for color in paragraph.colors),
-        paragraphs=page,
+        fonts=frozenset(font for paragraph in page for font in paragraph.fonts),
+        font_sizes=frozenset(get_averages([paragraph.font_size for paragraph in page], tolerance=tolerance)),
+        char_widths=frozenset(get_averages([paragraph.char_width for paragraph in page], tolerance=tolerance)),
+        colors=frozenset(color for paragraph in page for color in paragraph.colors),
+        paragraphs=tuple(page),
         split_end_paragraph=page[-1].split_end_line,
         starts_with_indent=page[0].is_indented
     )
@@ -533,7 +533,7 @@ def main():
         parser.add_argument("-d", "--doc_path", type=str, help="Path to the document object [list of LTPages] file.")
         parser.add_argument("-gd", "--generate_doc", action="store_true", help="Process the PDF from scratch.")
         parser.add_argument("-m", "--margins", type=float, nargs=4, default=(0, 20, 0, 15), help="Margins for clipping the page (left, top, right, bottom).")
-        parser.add_argument("-bbo", "--bbox_overlap", type=float, default=0.9, help="Bounding box overlap factor.")
+        parser.add_argument("-bbo", "--bbox_overlap", type=float, default=0.8, help="Bounding box overlap factor.")
         parser.add_argument("-cm", "--char_margin", type=float, default=4, help="Character margin factor.")
         parser.add_argument("-lm", "--line_margin", type=float, default=0.6, help="Line margin factor.")
         parser.add_argument("-lo", "--line_overlap", type=float, default=0.6, help="Line overlap factor.")
@@ -557,6 +557,7 @@ def main():
         pdf_path = "/home/rookslog/pdf2anki/examples/pathmarks_ocr.pdf" if args.__dict__.get("pdf_path", None) is None else args.pdf_path
         doc_path = os.path.splitext(pdf_path)[0] + "_doc.pkl" if args.__dict__.get("doc_path", None) is None else args.doc_path
 
+    generated = False
     
     if os.path.exists(doc_path) and not args.generate_doc:
 
@@ -573,6 +574,7 @@ def main():
             start_time = time.time()
             doc = tuple(extract_pages(pdf_path, laparams=params, maxpages=max_pages))
             end_time = time.time()
+            generated = True
             print(f"Processed {len(doc)} pages in {end_time - start_time:.4f} seconds.\n")
         except EOFError as e:
             logging.error(f"Error loading document: {e} \nDocument is empty.\n")
@@ -581,6 +583,7 @@ def main():
             start_time = time.time()
             doc = tuple(extract_pages(pdf_path, laparams=params, maxpages=max_pages))
             end_time = time.time()
+            generated = True
             print(f"Processed {len(doc)} pages in {end_time - start_time:.4f} seconds.\n")
     else:
         if args.generate_doc:
@@ -591,9 +594,10 @@ def main():
         logging.info(f"extract_pages_args: {pdf_path}, {params}, {max_pages}")
         doc = tuple(extract_pages(pdf_path, laparams=params, maxpages=max_pages))
         end_time = time.time()
+        generated = True
         print(f"Processed {len(doc)} pages in {end_time - start_time:.4f} seconds.\n")
               
-    if args.save_doc:
+    if args.save_doc and generated:
         print(f"Saving document to {doc_path}...")
         try:
             start_time = time.time()
