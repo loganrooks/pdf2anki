@@ -93,8 +93,8 @@ def test_extract_line_info():
     assert line_info.text == 'Hi', "Line text does not match"
     assert line_info.bbox == (0, 0, 18, 10), "Line bbox does not match"
     assert line_info.font_size == 12.0, "Line font size does not match"
-    assert line_info.fonts == {'FontA'}, "Line fonts do not match"
-    assert line_info.colors == {'black'}, "Line colors do not match"
+    assert line_info.fonts == frozenset({'FontA'}), "Line fonts do not match"
+    assert line_info.colors == frozenset({'black'}), "Line colors do not match"
     assert line_info.char_width == 9.0, "Line char width does not match"
     assert line_info.char_height == 10.0, "Line char height does not match"
     assert not line_info.split_end_word, "Line split_end_word should be False"
@@ -108,22 +108,22 @@ def test_extract_paragraph_info():
     # Mock LineInfo objects
     line1 = LineInfo(
         text="This is a test. ",
-        chars=[],
+        chars=(),
         bbox=(0, 0, 100, 10),
         font_size=12.0,
-        fonts={'FontA'},
-        colors={'black'},
+        fonts=frozenset({'FontA'}),
+        colors=frozenset({'black'}),
         char_width=10.0,
         char_height=10.0,
         split_end_word=False
     )
     line2 = LineInfo(
         text="This is a continuation. ",
-        chars=[],
+        chars=(),
         bbox=(0, 10, 120, 20),
         font_size=12.0,
-        fonts={'FontA'},
-        colors={'black'},
+        fonts=frozenset({'FontA'}),
+        colors=frozenset({'black'}),
         char_width=10.0,
         char_height=10.0,
         split_end_word=False
@@ -136,8 +136,8 @@ def test_extract_paragraph_info():
     # Assertions
     assert paragraph_info.text == "This is a test. This is a continuation. ", "Paragraph text does not match"
     assert paragraph_info.bbox == (0, 0, 120, 20), "Paragraph bbox does not match"
-    assert paragraph_info.fonts == {'FontA'}, "Paragraph fonts do not match"
-    assert paragraph_info.colors == {'black'}, "Paragraph colors do not match"
+    assert paragraph_info.fonts == frozenset({'FontA'}), "Paragraph fonts do not match"
+    assert paragraph_info.colors == frozenset({'black'}), "Paragraph colors do not match"
     assert paragraph_info.char_width == 10.0, "Paragraph char width does not match"
     assert paragraph_info.font_size == 12.0, "Paragraph font size does not match"
     assert not paragraph_info.split_end_line, "Paragraph split_end_line should be False"
@@ -148,10 +148,10 @@ def test_extract_page_info():
     paragraph1 = ParagraphInfo(
         pagenum=1,
         text="First paragraph.",
-        lines=[],
+        lines=(),
         bbox=(0, 100, 100, 150),
-        fonts={'FontA'},
-        colors={'black'},
+        fonts=frozenset({'FontA'}),
+        colors=frozenset({'black'}),
         char_width=10.0,
         font_size=12.0,
         split_end_line=False,
@@ -160,10 +160,10 @@ def test_extract_page_info():
     paragraph2 = ParagraphInfo(
         pagenum=1,
         text="Second paragraph.",
-        lines=[],
+        lines=(),
         bbox=(0, 50, 100, 100),
-        fonts={'FontA'},
-        colors={'black'},
+        fonts=frozenset({'FontA'}),
+        colors=frozenset({'black'}),
         char_width=10.0,
         font_size=12.0,
         split_end_line=False,
@@ -177,11 +177,11 @@ def test_extract_page_info():
     # Assertions
     assert page_info.text == "First paragraph.\n\nSecond paragraph.", "Page text does not match"
     assert page_info.bbox == (0, 50, 100, 150), "Page bbox does not match"
-    assert page_info.fonts == {'FontA'}, "Page fonts do not match"
-    assert page_info.font_sizes == [12.0], "Page font sizes do not match"
-    assert page_info.char_widths == [10.0], "Page char widths do not match"
-    assert page_info.colors == {'black'}, "Page colors do not match"
-    assert page_info.paragraphs == page, "Page paragraphs do not match"
+    assert page_info.fonts == frozenset({'FontA'}), "Page fonts do not match"
+    assert page_info.font_sizes == frozenset([12.0]), "Page font sizes do not match"
+    assert page_info.char_widths == frozenset([10.0]), "Page char widths do not match"
+    assert page_info.colors == frozenset({'black'}), "Page colors do not match"
+    assert page_info.paragraphs == tuple(page), "Page paragraphs do not match"
     assert not page_info.split_end_paragraph, "Page split_end_paragraph should be False"
     assert not page_info.starts_with_indent, "Page starts_with_indent should be False"
 
@@ -191,10 +191,10 @@ def test_extract_page_info_two_fonts():
     paragraph1 = ParagraphInfo(
         pagenum=1,
         text="First paragraph.",
-        lines=[],
+        lines=(),
         bbox=(0, 100, 100, 150),
-        fonts={'FontA'},
-        colors={'black'},
+        fonts=frozenset({'FontA'}),
+        colors=frozenset({'black'}),
         char_width=12.0,
         font_size=14.0,
         split_end_line=False,
@@ -203,10 +203,10 @@ def test_extract_page_info_two_fonts():
     paragraph2 = ParagraphInfo(
         pagenum=1,
         text="Second paragraph.",
-        lines=[],
+        lines=(),
         bbox=(0, 50, 100, 100),
-        fonts={'FontB'},
-        colors={'red'},
+        fonts=frozenset({'FontB'}),
+        colors=frozenset({'red'}),
         char_width=10.0,
         font_size=12.0,
         split_end_line=False,
@@ -215,10 +215,10 @@ def test_extract_page_info_two_fonts():
     paragraph3 = ParagraphInfo(
         pagenum=1,
         text="Second paragraph.",
-        lines=[],
+        lines=(),
         bbox=(0, 0, 100, 50),
-        fonts={'FontB'},
-        colors={'red'},
+        fonts=frozenset({'FontB'}),
+        colors=frozenset({'red'}),
         char_width=10.0,
         font_size=12.0,
         split_end_line=False,
@@ -228,10 +228,10 @@ def test_extract_page_info_two_fonts():
 
     # Extract PageInfo
     page_info = extract_page_info(page, tolerance=0.1)
-    assert page_info.fonts == {'FontA', 'FontB'}, "Page fonts do not match"
-    assert page_info.font_sizes == [12.0, 14.0], "Page font sizes do not match"
-    assert page_info.char_widths == [10.0, 12.0], "Page char widths do not match"
-    assert page_info.colors == {'black', 'red'}, "Page colors do not match"
+    assert page_info.fonts == frozenset({'FontA', 'FontB'}), "Page fonts do not match"
+    assert page_info.font_sizes == frozenset([12.0, 14.0]), "Page font sizes do not match"
+    assert page_info.char_widths == frozenset([10.0, 12.0]), "Page char widths do not match"
+    assert page_info.colors == frozenset({'black', 'red'}), "Page colors do not match"
 
 def test_process_ltpages_no_type_error():
     # Create mock PDFGraphicState
@@ -265,11 +265,11 @@ def test_process_ltpages_no_type_error():
     # Create mock LineInfo
     line_info = LineInfo(
         text='A',
-        chars=[extract_char_info(ltchar)],
+        chars=(extract_char_info(ltchar),),
         bbox=(0.0, 0.0, 10.0, 10.0),
         font_size=10.0,
-        fonts={'TestFont'},
-        colors={'DeviceGray'},
+        fonts=frozenset({'TestFont'}),
+        colors=frozenset({'DeviceGray'}),
         char_width=10.0,
         char_height=10.0,
         split_end_word=False,
@@ -280,10 +280,10 @@ def test_process_ltpages_no_type_error():
     paragraph_info = ParagraphInfo(
         pagenum=1,
         text='A',
-        lines=[line_info],
+        lines=(line_info,),
         bbox=(0.0, 0.0, 10.0, 10.0),
-        fonts={'TestFont'},
-        colors={'DeviceGray'},
+        fonts=frozenset({'TestFont'}),
+        colors=frozenset({'DeviceGray'}),
         char_width=10.0,
         font_size=10.0,
         split_end_line=False,
@@ -294,11 +294,11 @@ def test_process_ltpages_no_type_error():
     page_info = PageInfo(
         text='A',
         bbox=(0, 0, 10, 10),
-        fonts={'TestFont'},
-        font_sizes=[12.0],
-        char_widths=[10.0],
-        colors={'DeviceGray'},
-        paragraphs=[paragraph_info],
+        fonts=frozenset({'TestFont'}),
+        font_sizes=frozenset([12.0]),
+        char_widths=frozenset([10.0]),
+        colors=frozenset({'DeviceGray'}),
+        paragraphs=(paragraph_info,),
         split_end_paragraph=False,
         starts_with_indent=False
     )
@@ -368,11 +368,11 @@ def test_process_ltpages_no_type_error():
     processed_page = processed_pages[0]
     assert processed_page.text == 'A', "Page text does not match."
     assert processed_page.bbox == (0, 0, 10, 10), "Page bbox does not match."
-    assert processed_page.fonts == {'TestFont'}, "Page fonts do not match."
-    assert processed_page.font_sizes == [10.0], "Page font sizes do not match."
-    assert processed_page.char_widths == [10.0], "Page char widths do not match."
-    assert processed_page.colors == {'DeviceGray'}, "Page colors do not match."
-    assert processed_page.paragraphs == [paragraph_info], "Page paragraphs do not match."
+    assert processed_page.fonts == frozenset({'TestFont'}), "Page fonts do not match."
+    assert processed_page.font_sizes == frozenset([10.0]), "Page font sizes do not match."
+    assert processed_page.char_widths == frozenset([10.0]), "Page char widths do not match."
+    assert processed_page.colors == frozenset({'DeviceGray'}), "Page colors do not match."
+    assert processed_page.paragraphs == (paragraph_info,), "Page paragraphs do not match."
     assert not processed_page.split_end_paragraph, "Page split_end_paragraph should be False."
     assert not processed_page.starts_with_indent, "Page starts_with_indent should be False."
 
