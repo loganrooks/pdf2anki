@@ -13,21 +13,21 @@ from pdf2anki.utils import contained_in_bbox, get_average, is_valid_arg
 
 DEF_TOLERANCE: dict = {"font": 1e-1, "bbox": 1e-1, "text": 1e-1}
 
-@dataclass(frozen=True)
+@dataclass
 class ToCEntry:
     level: int
     title: str
     pagenum: int
     bbox: Tuple[float, float, float, float]
-    page_range: Optional[List[int]] = field(default_factory=List[str])
+    page_range: Optional[list[int]] = None
     start_vpos: Optional[float] = None
     end_vpos: Optional[float] = None
-    text_filter_ids: Optional[Set[int]] = field(default_factory=Set[str])
-    text: Optional[List[str]] = field(default_factory=List[str])
-    subsections: Optional[List["ToCEntry"]] = field(default_factory=List["ToCEntry"])
+    text_filter_ids: Optional[Set[int]] = None
+    text: Optional[list[str]] = None
+    subsections: Optional[list["ToCEntry"]] = None
 
     def __repr__(self):
-        return f"ToCEntry(level={self.level}, title={self.title}, page={self.page_range}, vpos={self.vpos}, bbox={self.bbox}, text={self.text})"
+        return f"Level: {self.level}, Title: {self.title}, Pages: {self.page_range}\nText Sample: {self.text[:30] if self.text is not None else None}\nSubsections: {[f'{subsection.title}' for subsection in self.subsections if self.subsections is not None]})"
 
 @dataclass(frozen=True)
 class FontFilterOptions:
@@ -248,7 +248,7 @@ class FontFilter:
             return False
         if self.opts.check_width and not admits_float(self.vars.char_width, line_info.char_width, self.opts.size_tolerance):
             return False
-        if self.opts.check_is_upper and (self.vars.is_upper != line_info.text.isupper() if self.opts.ign_pattern is None \
+        if self.opts.check_is_upper and not (self.vars.is_upper == line_info.text.isupper() if self.opts.ign_pattern is None \
                 else re.sub(self.opts.ign_pattern, "", line_info.text).isupper()):
             return False
         return True
@@ -276,7 +276,7 @@ class FontFilter:
             return False
         if self.opts.check_width and not admits_float(self.vars.char_width, paragraph_info.char_width, self.opts.size_tolerance):
             return False
-        if self.opts.check_is_upper and (self.vars.is_upper != paragraph_info.text.isupper() if self.opts.ign_pattern is None \
+        if self.opts.check_is_upper and not (self.vars.is_upper == paragraph_info.text.isupper() if self.opts.ign_pattern is None \
                 else re.sub(self.opts.ign_pattern, "", paragraph_info.text).isupper()):
             return False
         return True
@@ -285,7 +285,7 @@ class FontFilter:
         return hash((self.vars, self.opts))
     
     def __repr__(self):
-        return (f"FontFilter(vars={self.vars}, opts={self.opts})")
+        return (f"FontFilter(vars={self.vars},\nopts={self.opts})\n")
 
 
 class BoundingBoxFilter:
@@ -301,7 +301,7 @@ class BoundingBoxFilter:
         self.opts = opts
     
     def __repr__(self):
-        return (f"BoundingBoxFilter(vars={self.vars}, opts={self.opts})")
+        return (f"BoundingBoxFilter(\n\tvars={self.vars},\n\topts={self.opts})\n".replace(", ", ",\n\t\t"))
 
     @overload
     @classmethod
@@ -499,9 +499,6 @@ class BoundingBoxFilter:
     def __hash__(self):
         return hash((self.vars, self.opts))
     
-    def __repr__(self):
-        return (f"BoundingBoxFilter(vars={self.vars}, opts={self.opts})")
-    
 
 @dataclass(frozen=True)
 class TextFilterOptions:
@@ -531,7 +528,7 @@ class TextFilter:
         self.opts = opts
 
     def __repr__(self):
-        return (f"TextFilter(vars={self.vars}, opts={self.opts})")
+        return (f"TextFilter(\n\tvars={self.vars},\n\topts={self.opts})\n".replace(", ", ",\n\t\t"))
 
     def __hash__(self):
         return hash((self.vars, self.opts))
@@ -591,7 +588,7 @@ class TextFilter:
                 check_header=opts.get('check_header', False),
                 tolerance=opts.get('tolerance', DEF_TOLERANCE["text"])
             )
-        elif is_valid_arg(opts, Dict[str, Union[FontFilterOptions, TextFilterOptions, BoundingBoxFilterOptions]]):
+        elif is_valid_arg(opts, Dict[str, Optional[Union[FontFilterOptions, TextFilterOptions, BoundingBoxFilterOptions]]]):
             font_opts = opts.get('font', None)
             bbox_opts = opts.get('bbox', None)
             opts = opts.get('text', None)
@@ -685,7 +682,7 @@ class TextFilter:
         return True
     
     def __repr__(self):
-        return (f"TextFilter(vars={self.vars}, opts={self.opts})")
+        return (f"TextFilter((\n\tvars={self.vars},\n\topts={self.opts})\n".replace(", ", ",\n\t\t"))
     
 
 @dataclass(frozen=True)
@@ -724,7 +721,8 @@ class ToCFilter:
 
     @classmethod
     def from_paragraph_info(cls, paragraph_info: ParagraphInfo, 
-                            fltr_dict: dict[str, Union[bool, FontFilterOptions, BoundingBoxFilterOptions]]) -> 'ToCFilter':
+                            level: int,
+                            opts: dict[str, Union[bool, FontFilterOptions, BoundingBoxFilterOptions]]) -> 'ToCFilter':
         """
         Create a ToCFilter from a ParagraphInfo object.
 
@@ -735,23 +733,36 @@ class ToCFilter:
         Returns:
             ToCFilter: The created ToCFilter.
         """
-        lvl = fltr_dict.get('level')
-        if lvl is None:
-            raise ValueError("filter's 'level' is not set")
-        if lvl < 1:
+        if level < 1:
             raise ValueError("filter's 'level' must be >= 1")
-
-        opts = ToCFilterOptions(
-            check_font=fltr_dict.get('check_font', True),
-            check_bbox=fltr_dict.get('check_bbox', True),
-            greedy=fltr_dict.get('greedy', False)
-        )
-
-        font_filter = FontFilter.from_paragraph_info(paragraph_info, fltr_dict.get('font', {}))
-        bbox_filter = BoundingBoxFilter.from_paragraph_info(paragraph_info, fltr_dict.get('bbox', {}))
+        
+        if opts is None:
+            opts = {"toc": ToCFilterOptions(), "font": FontFilterOptions(), "bbox": BoundingBoxFilterOptions()}
+        elif is_valid_arg(opts, Dict[str, Union[bool, FontFilterOptions, BoundingBoxFilterOptions]]):
+            font_opts = opts.get('font', FontFilterOptions())
+            bbox_opts = opts.get('bbox', BoundingBoxFilterOptions())
+            opts = ToCFilterOptions(
+                    check_font=opts.get('check_font', True),
+                    check_bbox=opts.get('check_bbox', True),
+                    greedy=opts.get('greedy', False)
+            )
+        elif is_valid_arg(opts, Dict[str, Dict[str, Union[str, float, bool]]]):
+            font_opts = FontFilterOptions(**opts.get('font', {}))
+            bbox_opts = BoundingBoxFilterOptions(**opts.get('bbox', {}))
+            opts = ToCFilterOptions(**opts.get('toc', {}))
+        
+        elif is_valid_arg(opts, Dict[str, Optional[Union[ToCFilterOptions, FontFilterOptions, BoundingBoxFilterOptions]]]):
+            font_opts = opts.get('font', FontFilterOptions())
+            bbox_opts = opts.get('bbox', BoundingBoxFilterOptions())
+            opts = opts.get('toc', ToCFilterOptions())
+        else:
+            raise ValueError("Invalid argument types for 'opts'")
+        
+        font_filter = FontFilter.from_paragraph_info(paragraph_info, font_opts)
+        bbox_filter = BoundingBoxFilter.from_paragraph_info(paragraph_info, bbox_opts)
 
         vars = ToCFilterVars(
-            level=lvl,
+            level=level,
             font=font_filter,
             bbox=bbox_filter
         )
@@ -886,5 +897,5 @@ class ToCFilter:
         return hash((self.vars, self.opts))
     
     def __repr__(self):
-        return (f"ToCFilter(vars={self.vars}, opts={self.opts})")
+        return (f"ToCFilter(\n\tvars={self.vars},\n\topts={self.opts})\n".replace(", ", ",\n\t\t"))
 
