@@ -1,3 +1,4 @@
+import difflib
 from pdfminer.layout import LTChar, LTFigure, LTPage
 
 from pdf2anki.elements import CharInfo
@@ -80,3 +81,14 @@ def filter_chars_by_attribute(chars: List[CharInfo], attribute: str, threshold: 
 # chars = [...]  # Replace with actual list of CharInfo objects
 # filtered_chars = filter_chars_by_attribute(chars, 'char_width', 2.5)
 # print(filtered_chars)
+
+
+def show_diff(a: str, b: str) -> str:
+    diff = difflib.unified_diff(
+        a.splitlines(), 
+        b.splitlines(), 
+        fromfile='StringA', 
+        tofile='StringB', 
+        lineterm=''
+    )
+    return "\n".join(diff)
