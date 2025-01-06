@@ -320,7 +320,7 @@ def is_non_alphanumeric_line(line: List[CharInfo]) -> bool:
     """
     return all(not char.text.isalnum() for char in line)
 
-def extract_lines_from_text_elements(text_elements: List[CharInfo], char_margin_factor: float = 0.5, line_overlap_factor: float = 0.5, interrupt_chars: str = "-") -> List[LineInfo]:
+def extract_lines_from_text_elements(text_elements: List[CharInfo], char_margin_factor: float = 0.5, line_overlap_factor: float = 0.7, interrupt_chars: str = "-") -> List[LineInfo]:
     lines = []
     current_line = []
     last_element = None
@@ -354,9 +354,9 @@ def extract_lines_from_text_elements(text_elements: List[CharInfo], char_margin_
 
     return lines
 
-def extract_lines_from_figure(figure, char_margin_factor: float = 0.5, clip: Optional[Tuple[float]] = None) -> List[LineInfo]:
+def extract_lines_from_figure(figure, char_margin_factor: float = 3.0, line_overlap_factor: float=0.7, clip: Optional[Tuple[float]] = None) -> List[LineInfo]:
     text_elements = extract_text_from_figure(figure, clip=clip)
-    return extract_lines_from_text_elements(text_elements, char_margin_factor=char_margin_factor)
+    return extract_lines_from_text_elements(text_elements, char_margin_factor=char_margin_factor, line_overlap_factor=line_overlap_factor)
 
 def is_indented(paragraph_info: ParagraphInfo, indent_factor: float = 3.0) -> bool:
     """
@@ -442,14 +442,14 @@ def is_complete_sentence(text: str):
     sentence_end_patterns = [
         r'[.!?][\"\')\]]*\s*\(\d+\)$',  # Ends with punctuation followed by optional quotes, parentheses, or brackets and a citation
         r'[.!?][\"\')\]]*\s*\[\d+\]$',  # Ends with punctuation followed by optional quotes, parentheses, or brackets and a footnote
-        r'[.!?][\"\')\]]*\s*$'  # Ends with punctuation followed by optional quotes, parentheses, or brackets and space
+        r'[.!?][\"\')\]]*\s*\d*$',  # Ends with punctuation followed by optional quotes, parentheses, or brackets and space, or footnotes
     ]
 
     sentence_end_pattern = r'|'.join(sentence_end_patterns)
 
     # Check if the text matches any of the sentence-ending pattern
     
-    return bool(re.search(sentence_end_pattern, text))
+    return bool(re.search(sentence_end_pattern, text.rstrip()))
 
 def extract_paragraph_text(lines: tuple[LineInfo]) -> str:
     paragraph_text = remove_line_breaks(lines)
@@ -533,12 +533,46 @@ def extract_paragraph_info(paragraph: List[LineInfo], pagenum: Optional[int] = N
         colors=frozenset(color for line in paragraph for color in line.colors),
         char_width=get_average([line.char_width for line in paragraph]),
         font_size=get_average([line.font_size for line in paragraph]),
-        split_end_line=paragraph[-1].split_end_word or not is_complete_sentence(paragraph[-1].text),
+        split_end_line=paragraph[-1].split_end_word or (not is_complete_sentence(paragraph[-1].text) and len(paragraph) > 1), # Else it'd be a header or title.
         is_indented=is_indented(paragraph[1], paragraph[0], indent_factor=indent_factor) if len(paragraph) > 1 else False
     )
 
+def is_header(paragraph: ParagraphInfo, page_bbox: Tuple[float], x_margin_factor: float=4.0, tolerance: float = 1e-1) -> bool:
+    """
+    Check if a paragraph is a header.
 
-def extract_page_info(page: List[ParagraphInfo], tolerance: float = 1e-1) -> PageInfo:
+    Args:
+        paragraph (ParagraphInfo): Information about the paragraph.
+        page_bbox (Tuple[float]): The bounding box of the page.
+        tolerance (float): Tolerance for averaging values.
+
+    Returns:
+        bool: True if the paragraph is a header, False otherwise.
+    """
+    centered = is_centered(paragraph.lines[0], page_bbox, tolerance_factor=tolerance)
+    within_x_margin = all(line.bbox[0] - page_bbox[0] > x_margin_factor * paragraph.char_width for line in paragraph.lines)
+    return centered and within_x_margin
+
+def check_and_update_split_end_lines(paragraphs: List[ParagraphInfo], page_bbox: tuple[float], tolerance: float = 1e-1) -> List[ParagraphInfo]:
+    """
+    Check and update the split_end_line attribute in a list of ParagraphInfo elements.
+
+    Args:
+        paragraphs (list): A list of ParagraphInfo elements.
+        bbox (tuple): The bounding box of the page.
+        tolerance (float): Tolerance for averaging values.
+
+    Returns:
+        list: A list of ParagraphInfo elements with updated split_end_line attributes.
+    """
+    paragraphs_to_check = [paragraph for paragraph in paragraphs if paragraph.split_end_line]
+    for paragraph in paragraphs_to_check:
+        if is_header(paragraph, page_bbox, tolerance=tolerance):
+            paragraph.split_end_line = False
+    return paragraphs
+
+
+def extract_page_info(page: List[ParagraphInfo], font_size_grouping_threshold: float = 1e-1, split_end_lines_tolerance: float = 1e-1) -> PageInfo:
     """
     Extract information from a list of ParagraphInfo elements that form a page.
 
@@ -549,12 +583,14 @@ def extract_page_info(page: List[ParagraphInfo], tolerance: float = 1e-1) -> Pag
         PageInfo: A PageInfo dataclass with information about the page.
     """
     page_text = "\n\n".join(paragraph.text for paragraph in page)
+    bbox = concat_bboxes([paragraph.bbox for paragraph in page])
+    check_and_update_split_end_lines(page, bbox, tolerance=split_end_lines_tolerance)
     return PageInfo(
         text=page_text,
         bbox=concat_bboxes([paragraph.bbox for paragraph in page]),
         fonts=frozenset(font for paragraph in page for font in paragraph.fonts),
-        font_sizes=frozenset(get_averages([paragraph.font_size for paragraph in page], tolerance=tolerance)),
-        char_widths=frozenset(get_averages([paragraph.char_width for paragraph in page], tolerance=tolerance)),
+        font_sizes=frozenset(get_averages([paragraph.font_size for paragraph in page], tolerance=font_size_grouping_threshold)),
+        char_widths=frozenset(get_averages([paragraph.char_width for paragraph in page], tolerance=font_size_grouping_threshold)),
         colors=frozenset(color for paragraph in page for color in paragraph.colors),
         paragraphs=tuple(page),
         split_end_paragraph=page[-1].split_end_line,
@@ -568,11 +604,12 @@ def extract_paragraphs_from_page(page: LTPage,
                                  pagenum: Optional[int] = None,
                                  char_margin_factor: float = 4.0, 
                                  line_margin_factor: float = 0.5, 
+                                 line_overlap_factor: float = 0.7,
                                  clip: Optional[Tuple[float]] = None, 
                                  bbox_overlap: float = 1.0,
                                  indent_factor: float = 3.0) -> List[PageInfo]:
     paragraphs = []
-    lines = extract_lines_from_figure(page, char_margin_factor=char_margin_factor)
+    lines = extract_lines_from_figure(page, char_margin_factor=char_margin_factor, line_overlap_factor=line_overlap_factor, clip=clip)
     if not lines:
         return None
     current_paragraph = []
@@ -603,18 +640,19 @@ def extract_paragraphs_from_page(page: LTPage,
 
     return paragraphs
 
+
 @log_time
 @progress_monitor
-def process_ltpages(doc: List[LTPage], char_margin_factor: float = 4.0, line_margin_factor: float = 0.5, margins: Optional[Tuple[float]] = None, bbox_overlap: float = 1.0, verbose: bool = False) -> List[PageInfo]:
+def process_ltpages(doc: List[LTPage], char_margin_factor: float = 4.0, line_margin_factor: float = 0.5, line_overlap_factor: float = 0.7, margins: Optional[Tuple[float]] = None, bbox_overlap: float = 1.0, verbose: bool = False, font_size_grouping_threshold: float = 3e-1) -> List[PageInfo]:
     pages = []
     for page_num, page in enumerate(doc, start=1):
         clip = (margins[0], margins[1], page.width - margins[2], page.height - margins[3]) if margins else None
 
-        paragraphs = extract_paragraphs_from_page(page, pagenum=page_num, char_margin_factor=char_margin_factor, line_margin_factor=line_margin_factor, clip=clip, bbox_overlap=bbox_overlap)
+        paragraphs = extract_paragraphs_from_page(page, pagenum=page_num, char_margin_factor=char_margin_factor, line_margin_factor=line_margin_factor, line_overlap_factor=line_overlap_factor, clip=clip, bbox_overlap=bbox_overlap)
         if paragraphs is None:
             page_info = PageInfo(text="", bbox=page.bbox, paragraphs=[], font_sizes=[], char_widths=[], colors=set(), starts_with_indent=False, split_end_paragraph=False)
         else:
-            page_info = extract_page_info(paragraphs)
+            page_info = extract_page_info(paragraphs, font_size_grouping_threshold)
         page_info.update_pagenum(page_num, recursive=True)
         pages.append(page_info)
     return pages
