@@ -293,8 +293,8 @@ def contained_in_bbox(bbox1: Tuple[float], bbox2: Tuple[float], bbox_overlap: fl
     Check if bbox1 is contained in bbox2 based on the overlap percentage.
 
     Args:
-        bbox1 (tuple): Bounding box 1.
-        bbox2 (tuple): Bounding box 2.
+        bbox1 (tuple): Bounding box 1. Given as (left, bottom, right, top). Where bottom < top and left < right.
+        bbox2 (tuple): Bounding box 2. Given as (left, bottom, right, top). Where bottom < top and left < right.
         bbox_overlap (float): Overlap percentage of bbox1's area that must be in bbox2.
 
     Returns:

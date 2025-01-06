@@ -88,6 +88,7 @@ def admits_float(expect: Optional[float],
     return (expect is None) or (actual is not None and abs(expect - actual) <= tolerance)
 
 
+
 class FontFilter:
     def __init__(self, vars: FontFilterVars, opts: FontFilterOptions):
         """
@@ -486,14 +487,18 @@ class BoundingBoxFilter:
         Returns:
             bool: True if the bounding box is admitted, False otherwise.
         """
-        if self.opts.check_left and not (admits_float(self.vars.left, bbox[0], self.opts.tolerance) if self.opts.require_equality else contained_in_bbox(bbox, (self.vars.left, self.vars.bottom, self.vars.right, self.vars.top), 1-self.opts.tolerance)):
-            return False
-        if self.opts.check_bottom and not (admits_float(self.vars.bottom, bbox[1], self.opts.tolerance) if self.opts.require_equality else contained_in_bbox(bbox, (self.vars.left, self.vars.bottom, self.vars.right, self.vars.top), 1-self.opts.tolerance)):
-            return False
-        if self.opts.check_right and not (admits_float(self.vars.right, bbox[2], self.opts.tolerance) if self.opts.require_equality else contained_in_bbox(bbox, (self.vars.left, self.vars.bottom, self.vars.right, self.vars.top), 1-self.opts.tolerance)):
-            return False
-        if self.opts.check_top and not (admits_float(self.vars.top, bbox[3], self.opts.tolerance) if self.opts.require_equality else contained_in_bbox(bbox, (self.vars.left, self.vars.bottom, self.vars.right, self.vars.top), 1-self.opts.tolerance)):
-            return False
+        if self.opts.require_equality:
+            if self.opts.check_left and not admits_float(self.vars.left, bbox[0], self.opts.tolerance):
+                return False
+            if self.opts.check_bottom and not admits_float(self.vars.bottom, bbox[1], self.opts.tolerance):
+                return False
+            if self.opts.check_right and not admits_float(self.vars.right, bbox[2], self.opts.tolerance):
+                return False
+            if self.opts.check_top and not admits_float(self.vars.top, bbox[3], self.opts.tolerance):
+                return False
+        else:
+            if not contained_in_bbox(bbox, (self.vars.left, self.vars.bottom, self.vars.right, self.vars.top), 1 - self.opts.tolerance):
+                return False
         return True
 
     def __hash__(self):
@@ -531,12 +536,23 @@ class TextFilter:
         return (f"TextFilter(\n\tvars={self.vars},\n\topts={self.opts})\n".replace(", ", ",\n\t\t"))
 
     def __hash__(self):
-        return hash((self.vars, self.opts))
+        # Conditionally include bbox and font in the hash based on options
+        vars_to_hash = (self.vars.header,)
+        if self.opts.check_font:
+            vars_to_hash += (self.vars.font,)
+        if self.opts.check_bbox:
+            vars_to_hash += (self.vars.bbox,)
+        return hash((vars_to_hash, self.opts))
 
     def __eq__(self, other):
-        if isinstance(other, TextFilter):
-            return self.vars == other.vars and self.opts == other.opts
-        return False
+        if not isinstance(other, TextFilter):
+            return False
+        # Conditionally include bbox and font in the equality check based on options
+        if self.opts.check_font and self.vars.font != other.vars.font:
+            return False
+        if self.opts.check_bbox and self.vars.bbox != other.vars.bbox:
+            return False
+        return self.vars.header == other.vars.header and self.opts == other.opts
 
     @overload
     @classmethod
@@ -712,12 +728,23 @@ class ToCFilter:
         self.opts = opts
 
     def __hash__(self):
-        return hash((self.vars, self.opts))
+        # Conditionally include bbox and font in the hash based on options
+        vars_to_hash = (self.vars.level,)
+        if self.opts.check_font:
+            vars_to_hash += (self.vars.font,)
+        if self.opts.check_bbox:
+            vars_to_hash += (self.vars.bbox,)
+        return hash((vars_to_hash, self.opts))
 
     def __eq__(self, other):
-        if isinstance(other, ToCFilter):
-            return self.vars == other.vars and self.opts == other.opts
-        return False
+        if not isinstance(other, TextFilter):
+            return False
+        # Conditionally include bbox and font in the equality check based on options
+        if self.opts.check_font and self.vars.font != other.vars.font:
+            return False
+        if self.opts.check_bbox and self.vars.bbox != other.vars.bbox:
+            return False
+        return self.vars.level == other.vars.level and self.opts == other.opts
 
     @classmethod
     def from_paragraph_info(cls, paragraph_info: ParagraphInfo, 
@@ -899,3 +926,149 @@ class ToCFilter:
     def __repr__(self):
         return (f"ToCFilter(\n\tvars={self.vars},\n\topts={self.opts})\n".replace(", ", ",\n\t\t"))
 
+
+
+def is_similar_text_filter(tf1: TextFilter, tf2: TextFilter, tolerance_dict: Dict[str, float]) -> bool:
+    """
+    Check if two TextFilters are similar based on their options and a tolerance dictionary.
+
+    Args:
+        tf1 (TextFilter): The first TextFilter.
+        tf2 (TextFilter): The second TextFilter.
+        tolerance_dict (Dict[str, float]): The tolerance dictionary with keys "bbox" and "font".
+
+    Returns:
+        bool: True if the TextFilters are similar, False otherwise.
+    """
+    # Check if options are equal
+    if tf1.opts != tf2.opts:
+        return False
+
+    # Check font similarity if check_font is True
+    if tf1.opts.check_font:
+        font_tolerance = tolerance_dict.get("font", 0.0)
+        if not admits_float(tf1.vars.font.vars.font_size, tf2.vars.font.vars.font_size, font_tolerance * tf1.vars.font.vars.font_size):
+            return False
+        if not admits_float(tf1.vars.font.vars.char_width, tf2.vars.font.vars.char_width, font_tolerance * tf1.vars.font.vars.char_width):
+            return False
+
+    # Check bbox similarity if check_bbox is True
+    if tf1.opts.check_bbox:
+        bbox_tolerance = tolerance_dict.get("bbox", 0.0)
+        if not admits_float(tf1.vars.bbox.vars.left, tf2.vars.bbox.vars.left, bbox_tolerance):
+            return False
+        if not admits_float(tf1.vars.bbox.vars.bottom, tf2.vars.bbox.vars.bottom, bbox_tolerance):
+            return False
+        if not admits_float(tf1.vars.bbox.vars.right, tf2.vars.bbox.vars.right, bbox_tolerance):
+            return False
+        if not admits_float(tf1.vars.bbox.vars.top, tf2.vars.bbox.vars.top, bbox_tolerance):
+            return False
+    return True
+
+def find_similar_filter_sets(filters: List[TextFilter], tolerance_dict: Dict[str, float]) -> List[Set[int]]:
+    """
+    Find sets of similar TextFilters based on their options and a tolerance dictionary.
+
+    Args:
+        filters (List[TextFilter]): The list of TextFilters.
+        tolerance_dict (Dict[str, float]): The tolerance dictionary with keys "bbox" and "font".
+
+    Returns:
+        List[Set[int]]: A list of sets, where each set contains indices of similar TextFilters.
+    """
+    similar_sets: list[set] = []
+    for i, tf1 in enumerate(filters):
+        found = False
+        for similar_set in similar_sets:
+            if any(is_similar_text_filter(tf1, filters[j], tolerance_dict) for j in similar_set):
+                similar_set.add(i)
+                found = True
+                break
+        if not found:
+            similar_sets.append({i})
+    return similar_sets
+
+def average_float_vars(filters: List[TextFilter], indices: Set[int]) -> TextFilter:
+    """
+    Average the float type variables of a set of similar TextFilters.
+
+    Args:
+        filters (List[TextFilter]): The list of TextFilters.
+        indices (Set[int]): The indices of the similar TextFilters to average.
+
+    Returns:
+        TextFilter: The combined TextFilter with averaged float type variables.
+    """
+    if not indices:
+        raise ValueError("Indices set cannot be empty")
+
+    # Initialize sums and counts
+    font_size_sum = 0.0
+    char_width_sum = 0.0
+    bbox_left_sum = 0.0
+    bbox_top_sum = 0.0
+    bbox_right_sum = 0.0
+    bbox_bottom_sum = 0.0
+    count = len(indices)
+
+    # Sum the float type variables
+    for i in indices:
+        tf = filters[i]
+        if tf.opts.check_font:
+            font_size_sum += tf.vars.font.vars.font_size or 0.0
+            char_width_sum += tf.vars.font.vars.char_width or 0.0
+        if tf.opts.check_bbox:
+            bbox_left_sum += tf.vars.bbox.vars.left or 0.0
+            bbox_top_sum += tf.vars.bbox.vars.top or 0.0
+            bbox_right_sum += tf.vars.bbox.vars.right or 0.0
+            bbox_bottom_sum += tf.vars.bbox.vars.bottom or 0.0
+
+    # Calculate averages
+    averaged_font_size = font_size_sum / count if count > 0 else None
+    averaged_char_width = char_width_sum / count if count > 0 else None
+    averaged_bbox_left = bbox_left_sum / count if count > 0 else None
+    averaged_bbox_top = bbox_top_sum / count if count > 0 else None
+    averaged_bbox_right = bbox_right_sum / count if count > 0 else None
+    averaged_bbox_bottom = bbox_bottom_sum / count if count > 0 else None
+
+    # Create a new TextFilter with averaged values
+    averaged_font_filter_vars = FontFilterVars(
+        font_size=averaged_font_size,
+        char_width=averaged_char_width,
+        names=filters[next(iter(indices))].vars.font.vars.names,
+        colors=filters[next(iter(indices))].vars.font.vars.colors,
+        is_upper=filters[next(iter(indices))].vars.font.vars.is_upper
+    )
+
+    averaged_bbox_filter_vars = BoundingBoxFilterVars(
+        left=averaged_bbox_left,
+        top=averaged_bbox_top,
+        right=averaged_bbox_right,
+        bottom=averaged_bbox_bottom
+    )
+
+    averaged_font_filter = FontFilter(averaged_font_filter_vars, filters[next(iter(indices))].vars.font.opts)
+    averaged_bbox_filter = BoundingBoxFilter(averaged_bbox_filter_vars, filters[next(iter(indices))].vars.bbox.opts)
+
+    averaged_text_filter_vars = TextFilterVars(
+        font=averaged_font_filter,
+        bbox=averaged_bbox_filter,
+        header=filters[next(iter(indices))].vars.header
+    )
+
+    return TextFilter(averaged_text_filter_vars, filters[next(iter(indices))].opts)
+
+def merge_similar_text_filters(filters: List[TextFilter], tolerance_dict: Dict[str, float]) -> List[TextFilter]:
+    """
+    Merge similar TextFilters by averaging their float type variables.
+
+    Args:
+        filters (List[TextFilter]): The list of TextFilters.
+        tolerance_dict (Dict[str, float]): The tolerance dictionary with keys "bbox" and "font".
+
+    Returns:
+        List[TextFilter]: The list of merged TextFilters.
+    """
+    similar_sets = find_similar_filter_sets(filters, tolerance_dict)
+    merged_filters = [average_float_vars(filters, indices) for indices in similar_sets]
+    return merged_filters
