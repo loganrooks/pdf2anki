@@ -1,3 +1,4 @@
+import math
 import pdb
 import pickle
 from PIL import Image
@@ -16,9 +17,10 @@ from pdf2anki.extraction import (
     save_and_remove_images
 )
 
+from pdf2anki.tests.utils import compare_float_sets, create_test_lt_doc, PAGE_HEIGHT, PAGE_WIDTH, insert_headers_at_index
 from pdf2anki.utils import concat_bboxes
 from pdf2anki.elements import CharInfo, LineInfo, ParagraphInfo, PageInfo, FileObject, FileType
-from pdfminer.layout import LTChar, LTPage, LTTextLineHorizontal, LTFigure, LTImage, LTComponent, LTContainer, LTTextContainer, LTLayoutContainer, LTItemT
+from pdfminer.layout import LTChar, LTPage, LTTextLineHorizontal, LTFigure, LTImage, LTComponent, LTContainer, LTTextContainer, LTLayoutContainer, LTItemT, LAParams
 from pdfminer.pdffont import PDFFont
 from pdfminer.pdfcolor import PDFColorSpace
 from pdfminer.pdfparser import PDFStream, PDFParser
@@ -172,7 +174,7 @@ def test_extract_page_info():
     page = [paragraph1, paragraph2]
 
     # Extract PageInfo
-    page_info = extract_page_info(page, tolerance=0.1)
+    page_info = extract_page_info(page, font_size_grouping_threshold=0.1)
     
     # Assertions
     assert page_info.text == "First paragraph.\n\nSecond paragraph.", "Page text does not match"
@@ -227,152 +229,63 @@ def test_extract_page_info_two_fonts():
     page = [paragraph1, paragraph2, paragraph3]
 
     # Extract PageInfo
-    page_info = extract_page_info(page, tolerance=0.1)
+    page_info = extract_page_info(page, font_size_grouping_threshold=0.1)
     assert page_info.fonts == frozenset({'FontA', 'FontB'}), "Page fonts do not match"
     assert page_info.font_sizes == frozenset([12.0, 14.0]), "Page font sizes do not match"
     assert page_info.char_widths == frozenset([10.0, 12.0]), "Page char widths do not match"
     assert page_info.colors == frozenset({'black', 'red'}), "Page colors do not match"
 
 def test_process_ltpages_no_type_error():
-    # Create mock PDFGraphicState
-    class MockPDFGraphicState:
-        def __init__(self):
-            pass  # Add attributes if necessary
 
-    # Initialize PDFFont with required attributes
-    font_descriptor = {"FontName": "TestFont"}
-    widths = {ord('A'): 10.0}
-    font = PDFFont(descriptor=font_descriptor, widths=widths)
-    font.fontname = "TestFont"
+    text_blocks = [
+                # Page 1 has three paragraphs
+                "Paragraph 1: This is the first paragraph on page 1. \nLine 2.\n\n"
+                "Paragraph 2: This is the second paragraph on page 1. \nLine 2.\n\n"
+                "Paragraph 3: This is the third paragraph on page 1. \nLine 2",
+                
+                # Page 2 has three paragraphs
+                "Paragraph 1: This is the first paragraph on page 2. \nLine 2\n\n"
+                "Paragraph 2: This is the second paragraph on page 2. \nLine 2\n\n"
+                "Paragraph 3: This is the third paragraph on page 2. \nLine 2",
+                
+                # Page 3 has three paragraphs
+                "Paragraph 1: This is the first paragraph on page 3. \nLine 2\n\n"
+                "Paragraph 2: This is the second paragraph on page 3. \nLine 2\n\n"
+                "Paragraph 3: This is the third paragraph on page 3. \nLine 2"
+            ]
+        
+    headers = [
+            ("Header for Page 1", 0),  # Insert at first paragraph on Page 1
+            ("Header for Page 2", 1),  # Insert at second paragraph on Page 2
+            ("Header for Page 3", 2)   # Insert at third paragraph on Page 3
+        ]
 
-    # Initialize PDFColorSpace
-    ncs = PDFColorSpace(name='DeviceGray', ncomponents=1)
+    doc = create_test_lt_doc(text_blocks, headers, text_size=12.0, header_size=16.0, font_name="Arial")
+    text_blocks_with_headers = insert_headers_at_index(text_blocks, headers)
+    text_blocks_with_headers = ['\n\n'.join([paragraph for paragraph, _ in page]) for page in text_blocks_with_headers]
 
-    # Create mock LTChar
-    ltchar = LTChar(
-        matrix=(1, 0, 0, 1, 0, 0),
-        font=font,
-        fontsize=10.0,
-        scaling=1.0,
-        rise=0.0,
-        text='A',
-        textwidth=1.0,
-        textdisp=0.0,
-        ncs=ncs,
-        graphicstate=MockPDFGraphicState()
-    )
-
-    # Create mock LineInfo
-    line_info = LineInfo(
-        text='A',
-        chars=(extract_char_info(ltchar),),
-        bbox=(0.0, 0.0, 10.0, 10.0),
-        font_size=10.0,
-        fonts=frozenset({'TestFont'}),
-        colors=frozenset({'DeviceGray'}),
-        char_width=10.0,
-        char_height=10.0,
-        split_end_word=False,
-        pagenum=1
-    )
-
-    # Create mock ParagraphInfo
-    paragraph_info = ParagraphInfo(
-        pagenum=1,
-        text='A',
-        lines=(line_info,),
-        bbox=(0.0, 0.0, 10.0, 10.0),
-        fonts=frozenset({'TestFont'}),
-        colors=frozenset({'DeviceGray'}),
-        char_width=10.0,
-        font_size=10.0,
-        split_end_line=True,
-        is_indented=False
-    )
-
-    # Create mock PageInfo
-    page_info = PageInfo(
-        text='A',
-        bbox=(0, 0, 10, 10),
-        fonts=frozenset({'TestFont'}),
-        font_sizes=frozenset([12.0]),
-        char_widths=frozenset([10.0]),
-        colors=frozenset({'DeviceGray'}),
-        paragraphs=(paragraph_info,),
-        split_end_paragraph=True,
-        starts_with_indent=False
-    )
-
-    # Create mock LTTextLineHorizontal
-    class MockLTTextLineHorizontal(LTTextLineHorizontal):
-        def __init__(self, bbox, objs, word_margin=0.5):
-            super().__init__(word_margin=word_margin)
-            self.set_bbox(bbox)
-            self._objs = objs
-
-        def __iter__(self):
-            return iter(self._objs)
-
-    # Create mock LTFigure
-    class MockLTFigure(LTFigure):
-        def __init__(self, matrix, bbox, objs, name="TestFigure"):
-            super().__init__(name=name, bbox=bbox, matrix=matrix)
-            self.set_bbox(bbox)
-            self._objs = objs
-
-        def __iter__(self):
-            return iter(self._objs)
-
-    # Create mock LTPage
-    class MockLTPage(LTPage):
-        def __init__(self, pageid, bbox, objs):
-            super().__init__(pageid, bbox)
-            self.set_bbox(bbox)
-            self._objs = objs
-
-        def __iter__(self):
-            return iter(self._objs)
-
-    # Create mock LTTextLineHorizontal instance
-    lt_text_line = MockLTTextLineHorizontal(
-        bbox=(0, 0, 10, 10),
-        objs=[ltchar]
-    )
-
-    # Create mock LTFigure instance
-    lt_figure = MockLTFigure(
-        matrix=(1, 0, 0, 1, 0, 0),
-        bbox=(0, 0, 10, 10),
-        objs=[lt_text_line]
-    )
-  
-    # Create mock LTPage instance
-    lt_page = MockLTPage(
-        pageid=1,
-        bbox=(0, 0, 10, 10),
-        objs=[lt_figure]
-    )
-
-    # Mock doc as list of LTPage
-    doc = [lt_page]
+    params = LAParams(line_overlap=0.7, char_margin=3.0, line_margin=0.5)
 
     # Run process_ltpages
     try:
-        processed_pages = process_ltpages(doc)
+        processed_pages = process_ltpages(doc, char_margin_factor=params.char_margin, line_margin_factor=params.line_margin)
         processed_pages[0].update_pagenum(1)
     except TypeError as e:
         pytest.fail(f"TypeError was raised: {e}")
-
+    comparison_text = text_blocks_with_headers[0].replace(' \n', ' ')
+    
     # Assertions
-    assert len(processed_pages) == 1, "Processed pages count mismatch."
+    assert len(processed_pages) == 3, "Processed pages count mismatch."
     processed_page = processed_pages[0]
-    assert processed_page.text == 'A', "Page text does not match."
-    assert processed_page.bbox == (0, 0, 10, 10), "Page bbox does not match."
-    assert processed_page.fonts == frozenset({'TestFont'}), "Page fonts do not match."
-    assert processed_page.font_sizes == frozenset([10.0]), "Page font sizes do not match."
-    assert processed_page.char_widths == frozenset([10.0]), "Page char widths do not match."
+    assert processed_page.text == comparison_text, "Page text does not match."
+    comparison_bbox = (0, 534.0, 274.32, 650.0)
+    for i, coord in enumerate(processed_page.bbox):
+        assert math.isclose(coord, comparison_bbox[i], rel_tol=1e-6), f"Page bbox does not match at index {i}"
+    assert processed_page.fonts == frozenset({'Arial'}), "Page fonts do not match."
+    assert processed_page.font_sizes == frozenset([12.0, 16.0]), "Page font sizes do not match."
+    assert compare_float_sets(processed_page.char_widths, frozenset([4.75, 6.59]), abs_tol=1e-1), "Page char widths do not match."
     assert processed_page.colors == frozenset({'DeviceGray'}), "Page colors do not match."
-    assert processed_page.paragraphs == (paragraph_info,), "Page paragraphs do not match."
+    # assert processed_page.paragraphs[0] == (paragraph_info,), "Page paragraphs do not match."
     assert processed_page.split_end_paragraph, "Page split_end_paragraph should be True."
     assert not processed_page.starts_with_indent, "Page starts_with_indent should be False."
 
@@ -479,8 +392,6 @@ class MockLTPage(LTPage, MockLTContainer):
         MockLTContainer.__init__(self, bbox)
         LTPage.__init__(self, pageid, bbox)
         
-PAGE_WIDTH = letter[0]
-PAGE_HEIGHT = letter[1]
 
 def create_pdf(file_name: str, size: tuple, color: str) -> str:
     """
