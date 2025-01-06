@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import pickle
-from pdf2anki.extraction import merge_split_paragraphs
+from pdf2anki.extraction import merge_paragraphs, merge_split_paragraphs
 from pdf2anki.utils import clean_text, contained_in_bbox, get_text_index_from_vpos
 from pdf2anki.decorators import log_time
 from typing import Callable, List, Literal, Optional, Set, Tuple, Pattern, Union, overload
@@ -13,7 +13,7 @@ from pdfminer.layout import LAParams
 from pdfminer.high_level import extract_pages
 import re
 from pdf2anki.elements import PageInfo, ParagraphInfo, LineInfo, ElementType
-from pdf2anki.filters import ToCFilterOptions, ToCEntry, ToCFilter, TextFilterOptions, TextFilter, FontFilterOptions, BoundingBoxFilterOptions
+from pdf2anki.filters import ToCFilterOptions, ToCEntry, ToCFilter, TextFilterOptions, TextFilter, FontFilterOptions, BoundingBoxFilterOptions, average_float_vars, find_similar_filter_sets, merge_similar_text_filters
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Iterator, Tuple
 from collections import defaultdict
@@ -284,24 +284,42 @@ class Recipe:
             page_range = (1, len(doc))
             
         for i, entry in enumerate(toc_entries):
-            filtered_paragraphs = []
+            filtered_pages = []
             end_page = toc_entries[i+1].pagenum if i+1 < len(toc_entries) else page_range[1]
             entry.page_range[1] = end_page
             end_vpos = toc_entries[i+1].bbox[3] if i+1 < len(toc_entries) else 0
             entry.end_vpos = end_vpos
             
-            paragraphs = [paragraph for paragraph in doc[entry.page_range[0]].paragraphs if paragraph.bbox[3] <= entry.start_vpos]\
-                         + [paragraph for page in doc[entry.page_range[0]+1:entry.page_range[1]-1] for paragraph in page.paragraphs]\
-                         + [paragraph for paragraph in doc[entry.page_range[1]-1].paragraphs if paragraph.bbox[3] > end_vpos]
-            merged_paragraphs = merge_split_paragraphs(paragraphs)
-            for paragraph in merged_paragraphs:
+            # paragraphs = [paragraph for paragraph in doc[entry.page_range[0]].paragraphs if paragraph.bbox[3] <= entry.start_vpos]\
+            #              + [paragraph for page in doc[entry.page_range[0]+1:entry.page_range[1]-1] for paragraph in page.paragraphs]\
+            #              + [paragraph for paragraph in doc[entry.page_range[1]-1].paragraphs if paragraph.bbox[3] > end_vpos]
+            # merged_paragraphs = merge_split_paragraphs(paragraphs)
+            previous_page_split = False
+            pages = doc[entry.page_range[0]-1:end_page]
+            for j, page in enumerate(pages):
+                filtered_page = []
+                paragraphs = [paragraph for paragraph in page.paragraphs]
+                if page.pagenum == entry.page_range[0]: # or if j == 0
+                    paragraphs = [paragraph for paragraph in paragraphs if paragraph.bbox[3] <= entry.start_vpos]
+                if page.pagenum == end_page: # or if j == len(pages)-1
+                    paragraphs = [paragraph for paragraph in paragraphs if paragraph.bbox[3] > end_vpos]
+                for k, paragraph in enumerate(paragraphs):
                     for text_filter_id in entry.text_filter_ids:
                         text_filter = self.text_filters[text_filter_id]
-                        if text_filter.admits(paragraph):
-                            filtered_paragraphs.append(paragraph.text)
+                        if k == 0 and previous_page_split:
+                            merged_paragraph = merge_paragraphs([pages[j-1].paragraphs[-1], paragraph])
+                            previous_page_split = False
+                        elif k == len(paragraphs)-1 and paragraph.split_end_line:
+                            merged_paragraph = merge_paragraphs([paragraph, pages[j+1].paragraphs[0]])
+                            previous_page_split = True
+                        else:
+                            merged_paragraph = paragraph
+                        if text_filter.admits(merged_paragraph):
+                            filtered_page.append(merged_paragraph.text)
                             break
+                filtered_pages.append('\n'.join(filtered_page))
 
-            entry.text = "\n\n".join(filtered_paragraphs)
+            entry.text = "\n\n".join(filtered_pages)
         return self
 
     def extract_toc(self, doc: List[PageInfo], page_range: Optional[Tuple[int, int]] = None, extract_text: bool = False) -> List[ToCEntry]:
@@ -321,6 +339,45 @@ class Recipe:
             self.extract_text_for_headers(doc, merged_all_toc_entries, page_range)
 
         return all_toc_entries
+    
+def merge_similar_text_filters_in_recipe(recipe: Recipe, tolerance_dict: Dict[str, float]) -> Recipe:
+    """
+    Merge similar TextFilters in a Recipe instance while maintaining the proper mapping structure.
+
+    Args:
+        recipe (Recipe): The Recipe instance.
+        tolerance_dict (Dict[str, float]): The tolerance dictionary with keys "bbox" and "font".
+
+    Returns:
+        Recipe: The updated Recipe instance with merged TextFilters.
+    """
+    # Find sets of similar text filters
+    text_filters_list = list(recipe.text_filters.values())
+    similar_sets = find_similar_filter_sets(text_filters_list, tolerance_dict)
+
+    # Merge similar text filters
+    merged_filters = [average_float_vars(text_filters_list, indices) for indices in similar_sets]
+
+    # Create a mapping from old text filter IDs to new text filter IDs
+    old_to_new_id_map = {}
+    for indices, merged_filter in zip(similar_sets, merged_filters):
+        new_id = recipe._generate_filter_id(merged_filter)
+        for index in indices:
+            old_id = recipe._generate_filter_id(text_filters_list[index])
+            old_to_new_id_map[old_id] = new_id
+
+    # Update the text filters in the recipe
+    recipe.text_filters = {recipe._generate_filter_id(merged_filter): merged_filter for merged_filter in merged_filters}
+
+    # Update the toc_to_text_map in the recipe
+    new_toc_to_text_map = {}
+    for toc_filter_id, text_filter_ids in recipe.toc_to_text_map.items():
+        new_text_filter_ids = {old_to_new_id_map[old_id] for old_id in text_filter_ids}
+        new_toc_to_text_map[toc_filter_id] = new_text_filter_ids
+
+    recipe.toc_to_text_map = new_toc_to_text_map
+
+    return recipe
 
 @overload
 def search_in_page(regex: re.Pattern, 
@@ -497,12 +554,12 @@ def extract_elements(doc: List[PageInfo],
 @log_time
 def generate_recipe(doc: List[PageInfo], 
                     headers: List[Dict[str, Union[Tuple[int, str], List[Tuple[int, str]], int]]], 
-                    page_numbers: List[int] = None,
                     tolerances: dict = {"font": 1e-1, "bbox": 1e-1}, 
                     ign_pattern=None, 
                     ign_case=True,
                     clip: Optional[Tuple[float]] = None,
                     include_text_filters: bool = False,
+                    merge_similar_text_filters: bool = True,
                     toc_filter_options: Optional[List[Dict[str, Union[ToCFilterOptions, FontFilterOptions, BoundingBoxFilterOptions]]]] = None,
                     text_filter_options: Optional[List[Dict[str, Union[TextFilterOptions, FontFilterOptions, BoundingBoxFilterOptions]]]] = None) -> Recipe:
     header_filters: List[ToCFilter] = []
@@ -566,12 +623,14 @@ def generate_recipe(doc: List[PageInfo],
                     text_filter = TextFilter.from_paragraph_info(text_element, opts)
                     text_filters.append(text_filter)
             all_text_filters.append(text_filters)
-
+    
+    
     recipe_dict = {
         "heading": header_filters,
         "text": all_text_filters if include_text_filters else []
     }
-    return Recipe(recipe_dict)
+    recipe = Recipe(recipe_dict)
+    return recipe if not merge_similar_text_filters else merge_similar_text_filters_in_recipe(recipe, tolerances)
 
 @log_time
 def merge_toc_entries(toc_entries, tolerance=30):
@@ -617,6 +676,29 @@ def nest_toc_entries(flat_toc: List[ToCEntry]) -> List[ToCEntry]:
         return nested
 
     return nest_entries(flat_toc, flat_toc[0].level)
+
+def toc_to_dict(toc_entries: List[ToCEntry], include_metadata: bool = False) -> List[ToCEntry]:
+   for toc_entry in toc_entries:
+         toc_entry_dict = {
+              "level": toc_entry.level,
+              "title": toc_entry.title,
+              "pagenum": toc_entry.pagenum,
+              "page_range": toc_entry.page_range,
+              "start_vpos": toc_entry.start_vpos,
+              "end_vpos": toc_entry.end_vpos,
+              "bbox": toc_entry.bbox,
+              "text": toc_entry.text,
+              "subsections": toc_to_dict(toc_entry.subsections, include_metadata)
+         }
+         if include_metadata:
+              toc_entry_dict["text_filter_ids"] = toc_entry.text_filter_ids
+         yield toc_entry_dict
+        
+
+
+def save_toc_entries(toc_entries: List[ToCEntry], output_path):
+    with open(output_path, "w") as f:
+        json.dump([entry.to_() for entry in toc_entries], f, indent=4)
 
 def main():   
     def parse_args():
@@ -668,17 +750,18 @@ def main():
 
     
     recipe = generate_recipe(doc, headers, 
-                             page_numbers=None, 
                              tolerances={"font": 3e-1, "bbox": 3e-1}, 
                              ign_pattern=ign_pattern, clip=None, 
                              include_text_filters=True,
                              toc_filter_options=toc_filter_options,
                              text_filter_options=text_filter_options)
-    
+    assert isinstance(recipe, Recipe)
     page_range = [16,len(doc)-22]
     toc_entries = recipe.extract_toc(doc, extract_text=True, page_range=page_range)
     merged_toc_entries = merge_toc_entries(toc_entries, tolerance=30)
     nested_toc_entries = nest_toc_entries(merged_toc_entries)
+
+    
 
     print(recipe)
     print(nested_toc_entries)
