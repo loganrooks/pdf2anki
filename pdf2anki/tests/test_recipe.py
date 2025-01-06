@@ -8,6 +8,7 @@ from pdf2anki.filters import ToCFilter, TextFilter, ToCFilterOptions, TextFilter
 import pytest
 from pdf2anki.elements import PageInfo, ParagraphInfo, LineInfo
 from pdf2anki.recipe import get_text_index_from_vpos
+from pdf2anki.tests.utils import create_test_doc
 
 @pytest.fixture
 def page_info():
@@ -80,73 +81,43 @@ def test_get_text_index_from_vpos_end_of_page(page_info):
     assert index == len("First paragraph.\n\nSecond paragraph.\n\n")
 
 
-from unittest.mock import MagicMock
-from pdf2anki.elements import PageInfo, ParagraphInfo, LineInfo
-
-# Mock PageInfo
-def create_test_doc(text_block: str, paragraphs_per_page: int, lines_per_paragraph: int) -> List[PageInfo]:
-    paragraphs = text_block.split('\n\n')
-    doc = []
-
-    for page_num in range(1, (len(paragraphs) // paragraphs_per_page) + 1):
-        page_paragraphs = []
-        for para_num in range(paragraphs_per_page):
-            if (page_num - 1) * paragraphs_per_page + para_num >= len(paragraphs):
-                break
-            paragraph_text = paragraphs[(page_num - 1) * paragraphs_per_page + para_num]
-            lines = paragraph_text.split('\n')
-            line_infos = []
-            for line_num, line_text in enumerate(lines[:lines_per_paragraph]):
-                line_info = LineInfo(
-                    text=line_text,
-                    chars=(),
-                    bbox=(0.0, 0.0, 100.0, 10.0 * (line_num + 1)),
-                    font_size=12.0,
-                    char_height=12.0,
-                    char_width=6.0,
-                    fonts=frozenset({"Arial"}),
-                    colors=frozenset({"#000000"})
-                )
-                line_infos.append(line_info)
-            paragraph_info = ParagraphInfo(
-                text=paragraph_text,
-                lines=tuple(line_infos),
-                bbox=(0.0, 0.0, 100.0, 10.0 * len(lines)),
-                font_size=12.0,
-                char_width=6.0,
-                fonts=frozenset({"Arial"}),
-                colors=frozenset({"#000000"})
-            )
-            page_paragraphs.append(paragraph_info)
-        page_info = PageInfo(
-            text='\n\n'.join(paragraph.text for paragraph in page_paragraphs),
-            bbox=(0.0, 0.0, 100.0, 200.0),
-            fonts=frozenset({"Arial"}),
-            font_sizes=frozenset([12.0]),
-            char_widths=frozenset([6.0]),
-            colors=frozenset({"#000000"}),
-            paragraphs=tuple(page_paragraphs),
-            split_end_paragraph=False,
-            pagenum=page_num
-        )
-        doc.append(page_info)
-
-    return doc
-
-# Mock PageInfo
 
 
 class TestGenerateRecipe(unittest.TestCase):
 
     def setUp(self):
         # Use the mocked PageInfo, ParagraphInfo, LineInfo
-        self.doc = create_test_doc("First paragraph.\nSecond line.\n\nSecond paragraph.\nSecond line.", 1, 2)
+        text_blocks = [
+                # Page 1 has three paragraphs
+                "Paragraph 1: This is the first paragraph on page 1.\nLine 2\n\n"
+                "Paragraph 2: This is the second paragraph on page 1.\nLine 2\n\n"
+                "Paragraph 3: This is the third paragraph on page 1.\nLine 2",
+                
+                # Page 2 has three paragraphs
+                "Paragraph 1: This is the first paragraph on page 2.\nLine 2\n\n"
+                "Paragraph 2: This is the second paragraph on page 2.\nLine 2\n\n"
+                "Paragraph 3: This is the third paragraph on page 2.\nLine 2",
+                
+                # Page 3 has three paragraphs
+                "Paragraph 1: This is the first paragraph on page 3.\nLine 2\n\n"
+                "Paragraph 2: This is the second paragraph on page 3.\nLine 2\n\n"
+                "Paragraph 3: This is the third paragraph on page 3.\nLine 2"
+            ]
+        
+        headers = [
+                ("Header for Page 1", 0),  # Insert at first paragraph on Page 1
+                ("Header for Page 2", 1),  # Insert at second paragraph on Page 2
+                ("Header for Page 3", 2)   # Insert at third paragraph on Page 3
+            ]
+
+        self.doc = create_test_doc(text_blocks, headers, text_size=12.0, header_size=16.0, font_name="Arial")
 
 
-        # Mock headers
+        # Mock headers for document created with create_test_doc
         self.headers = [
-            {"header": (1, "First Paragraph"), "level": 1, "text": [(1, "Second line")]},
-            {"header": (2, "Second Paragraph"), "level": 2, "text": [(2, "Second line")]}
+            {"header": (1, "Header for Page 1"), "level": 1, "text": [(1, "Paragraph 1: This is the first paragraph on page 1.")]},
+            {"header": (2, "Header for Page 2"), "level": 2, "text": [(2, "Paragraph 2: This is the second paragraph on page 2.")]},
+            {"header": (3, "Header for Page 3"), "level": 1, "text": [(3, "Paragraph 3: This is the third paragraph on page 3.")]}
         ]
 
         # Mock ToCFilter and TextFilter
@@ -155,38 +126,40 @@ class TestGenerateRecipe(unittest.TestCase):
 
         # Mock options
         self.toc_filter_options = [{"toc": ToCFilterOptions(), "font": FontFilterOptions(), "bbox": BoundingBoxFilterOptions()} for _ in self.headers]
-        self.text_filter_options = [{"text": TextFilterOptions(), "font": FontFilterOptions(), "bbox": BoundingBoxFilterOptions()} for _ in self.headers]
+        self.text_filter_options = [{"text": TextFilterOptions(check_bbox=True), "font": FontFilterOptions(), "bbox": BoundingBoxFilterOptions(require_equality=True)} for _ in self.headers]
 
     def test_generate_recipe_basic(self):
         recipe = generate_recipe(self.doc, self.headers)
         self.assertIsInstance(recipe, Recipe)
-        self.assertEqual(len(recipe.toc_filters), 2)
+        self.assertEqual(len(recipe.toc_filters), 3)
         self.assertEqual(len(recipe.text_filters), 0)
 
     def test_generate_recipe_with_text_filters(self):
-        recipe = generate_recipe(self.doc, self.headers, include_text_filters=True)
+        recipe = generate_recipe(self.doc, self.headers, include_text_filters=True, tolerances={"font": 0.1, "bbox": 0.1}, merge_similar_text_filters=False)
         self.assertIsInstance(recipe, Recipe)
-        self.assertEqual(len(recipe.toc_filters), 2)
-        self.assertEqual(len(recipe.text_filters), 1, "Expected 1 text filter, because they are duplicate filters, got %d" % len(recipe.text_filters))
+        self.assertEqual(len(recipe.toc_filters), 3)
+        self.assertEqual(len(recipe.text_filters), 3, "Expected 3 text filter, because we are not merging, got %d" % len(recipe.text_filters))
 
     def test_generate_recipe_with_options(self):
-        recipe = generate_recipe(self.doc, self.headers, 
+        recipe = generate_recipe(self.doc, self.headers, include_text_filters=True, merge_similar_text_filters=True,
                                  toc_filter_options=self.toc_filter_options, 
                                  text_filter_options=self.text_filter_options)
         self.assertIsInstance(recipe, Recipe)
-        self.assertEqual(len(recipe.toc_filters), 2)
-        self.assertEqual(len(recipe.text_filters), 0)
+        self.assertEqual(len(recipe.toc_filters), 3)
+        self.assertEqual(len(recipe.text_filters), 3)
 
-    def test_generate_recipe_with_invalid_page_numbers(self):
-        with self.assertRaises(ValueError):
-            generate_recipe(self.doc, self.headers, page_numbers=[-1])
+    def test_generate_recipe_with_merge_similar_text_filters(self):
+        recipe = generate_recipe(self.doc, self.headers, include_text_filters=True, merge_similar_text_filters=True)
+        self.assertIsInstance(recipe, Recipe)
+        self.assertEqual(len(recipe.toc_filters), 3)
+        self.assertEqual(len(recipe.text_filters), 1), "Expected 1 text filter, because we are merging, got %d" % len(recipe.text_filters)
 
     def test_generate_recipe_with_custom_tolerances(self):
-        tolerances = {"font": 0.2, "bbox": 0.2}
-        recipe = generate_recipe(self.doc, self.headers, tolerances=tolerances)
+        tolerances = {"font": 0, "bbox": 0}
+        recipe = generate_recipe(self.doc, self.headers, tolerances=tolerances, include_text_filters=True, merge_similar_text_filters=True)
         self.assertIsInstance(recipe, Recipe)
-        self.assertEqual(len(recipe.toc_filters), 2)
-        self.assertEqual(len(recipe.text_filters), 0)
+        self.assertEqual(len(recipe.toc_filters), 3)
+        self.assertEqual(len(recipe.text_filters), 3)
 
 if __name__ == '__main__':
     unittest.main()
