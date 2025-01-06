@@ -676,23 +676,6 @@ def nest_toc_entries(flat_toc: List[ToCEntry]) -> List[ToCEntry]:
         return nested
 
     return nest_entries(flat_toc, flat_toc[0].level)
-
-def toc_to_dict(toc_entries: List[ToCEntry], include_metadata: bool = False) -> List[ToCEntry]:
-   for toc_entry in toc_entries:
-         toc_entry_dict = {
-              "level": toc_entry.level,
-              "title": toc_entry.title,
-              "pagenum": toc_entry.pagenum,
-              "page_range": toc_entry.page_range,
-              "start_vpos": toc_entry.start_vpos,
-              "end_vpos": toc_entry.end_vpos,
-              "bbox": toc_entry.bbox,
-              "text": toc_entry.text,
-              "subsections": toc_to_dict(toc_entry.subsections, include_metadata)
-         }
-         if include_metadata:
-              toc_entry_dict["text_filter_ids"] = toc_entry.text_filter_ids
-         yield toc_entry_dict
         
 
 
